@@ -22,7 +22,17 @@ namespace ParaphraseTool.Platform
         {
             var uia = await Task.Run(() => TryReadUia(el));
 
-            if (!string.IsNullOrWhiteSpace(uia.Selection)) return new FieldText(uia.Selection, true, uia.SelectionRange);
+            if (!string.IsNullOrWhiteSpace(uia.Selection))
+            {
+                // Web editors report emoji images as U+FFFC; the clipboard copy carries the real characters.
+                if (TextHygiene.IsUnreliable(uia.Selection))
+                {
+                    DebugLog.Write($"UIA selection damaged ({TextHygiene.Describe(uia.Selection)}); reading via clipboard");
+                    var copied = await CopyAsync();
+                    if (!string.IsNullOrWhiteSpace(copied)) return new FieldText(copied, true, uia.SelectionRange);
+                }
+                return new FieldText(uia.Selection, true, uia.SelectionRange);
+            }
 
             // Without a TextPattern UIA can't report the selection, so probe with Ctrl+C.
             if (!uia.SelectionKnown)
@@ -31,7 +41,14 @@ namespace ParaphraseTool.Platform
                 if (!string.IsNullOrWhiteSpace(copied)) return new FieldText(copied, true);
             }
 
-            if (!string.IsNullOrWhiteSpace(uia.Whole)) return new FieldText(uia.Whole, false);
+            if (!string.IsNullOrWhiteSpace(uia.Whole))
+            {
+                if (!TextHygiene.IsUnreliable(uia.Whole)) return new FieldText(uia.Whole, false);
+                DebugLog.Write($"UIA text damaged ({TextHygiene.Describe(uia.Whole)}); reading via clipboard");
+                Native.CtrlKey('A');
+                var copied = await CopyAsync();
+                return new FieldText(string.IsNullOrWhiteSpace(copied) ? uia.Whole : copied, false);
+            }
 
             Native.CtrlKey('A');
             return new FieldText(await CopyAsync(), false);

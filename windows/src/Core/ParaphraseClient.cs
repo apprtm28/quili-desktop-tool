@@ -27,17 +27,21 @@ namespace ParaphraseTool.Core
             if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(serverUrl))
                 throw new InvalidOperationException("Server URL or API key not set. Open Settings from the tray icon.");
 
-            DebugLog.Write($"paraphrase request: POST {serverUrl}/api/paraphrase ({text.Length} chars)");
-            var body = JsonSerializer.Serialize(new { text, style = settings.Style });
+            text = TextHygiene.StripLoneSurrogates(text);
+            DebugLog.Write($"paraphrase request: POST {serverUrl}/api/paraphrase ({TextHygiene.Describe(text)})");
+            // The default encoder escapes every non-ASCII character (\uD83D\uDE00), so emoji cannot be
+            // mangled in transit; the body is also sent explicitly as UTF-8.
+            var body = JsonSerializer.Serialize(new { text, style = TextHygiene.StripLoneSurrogates(settings.Style) });
 
             using var req = new HttpRequestMessage(HttpMethod.Post, serverUrl + "/api/paraphrase")
             {
-                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                Content = new StringContent(body, new UTF8Encoding(false), "application/json"),
             };
             req.Headers.Add("X-API-Key", apiKey);
 
             using var resp = await Http.SendAsync(req, ct).ConfigureAwait(false);
-            var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            // Decode as UTF-8 ourselves rather than trusting a missing/incorrect charset header.
+            var json = Encoding.UTF8.GetString(await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false));
 
             DebugLog.Write($"paraphrase response: HTTP {(int)resp.StatusCode}");
             if (!resp.IsSuccessStatusCode)
@@ -56,7 +60,9 @@ namespace ParaphraseTool.Core
             var content = doc.RootElement.GetProperty("text").GetString();
             if (string.IsNullOrWhiteSpace(content))
                 throw new InvalidOperationException("Paraphrase server returned an empty response.");
-            return content.Trim();
+            content = TextHygiene.StripLoneSurrogates(content).Trim();
+            DebugLog.Write($"paraphrase result: {TextHygiene.Describe(content)}");
+            return content;
         }
     }
 }

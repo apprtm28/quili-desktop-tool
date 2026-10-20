@@ -17,7 +17,14 @@ enum TextAccess {
     static func read(_ el: AXUIElement) async -> FieldText {
         let selectionAttr = AX.attr(el, kAXSelectedTextAttribute)
         if let sel = selectionAttr as? String, !isBlank(sel) {
-            return FieldText(text: sel, isSelection: true, range: AX.attr(el, kAXSelectedTextRangeAttribute).map { $0 as! AXValue })
+            let range = AX.attr(el, kAXSelectedTextRangeAttribute).map { $0 as! AXValue }
+            // Web editors report emoji images as U+FFFC; the pasteboard copy carries the real characters.
+            if TextHygiene.isUnreliable(sel) {
+                DebugLog.write("AX selection damaged (\(TextHygiene.describe(sel))); reading via pasteboard")
+                let copied = await copySelection()
+                if !isBlank(copied) { return FieldText(text: copied, isSelection: true, range: range) }
+            }
+            return FieldText(text: sel, isSelection: true, range: range)
         }
 
         // No AX selection support: probe with Cmd+C.
@@ -27,7 +34,11 @@ enum TextAccess {
         }
 
         if let whole = AX.string(el, kAXValueAttribute), !isBlank(whole) {
-            return FieldText(text: whole, isSelection: false, range: nil)
+            if !TextHygiene.isUnreliable(whole) { return FieldText(text: whole, isSelection: false, range: nil) }
+            DebugLog.write("AX text damaged (\(TextHygiene.describe(whole))); reading via pasteboard")
+            pressCommand(keyA)
+            let copied = await copySelection()
+            return FieldText(text: isBlank(copied) ? whole : copied, isSelection: false, range: nil)
         }
 
         pressCommand(keyA)

@@ -27,11 +27,11 @@ enum ParaphraseClient {
 
         var req = URLRequest(url: url, timeoutInterval: 120)
         req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
         req.httpBody = try JSONSerialization.data(withJSONObject: ["text": text, "style": settings.style])
 
-        DebugLog.write("paraphrase request: POST \(url) (\(text.count) chars)")
+        DebugLog.write("paraphrase request: POST \(url) (\(TextHygiene.describe(text)))")
         let (data, resp) = try await URLSession.shared.data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         DebugLog.write("paraphrase response: HTTP \(status)")
@@ -45,6 +45,7 @@ enum ParaphraseClient {
         guard let out = (json?["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !out.isEmpty else {
             throw ParaphraseError(message: "Paraphrase server returned an empty response.")
         }
+        DebugLog.write("paraphrase result: \(TextHygiene.describe(out))")
         return out
     }
 }
