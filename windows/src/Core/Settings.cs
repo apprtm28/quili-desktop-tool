@@ -4,9 +4,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Microsoft.Win32;
+using ParaphraseTool.Platform;
 
-namespace ParaphraseTool
+namespace ParaphraseTool.Core
 {
     public class Settings
     {
@@ -20,7 +20,6 @@ namespace ParaphraseTool
         static readonly string Dir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ParaphraseTool");
         static readonly string FilePath = Path.Combine(Dir, "settings.json");
-        const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
 
         [JsonIgnore]
         public string ApiKey
@@ -60,17 +59,7 @@ namespace ParaphraseTool
         {
             Directory.CreateDirectory(Dir);
             File.WriteAllText(FilePath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-            ApplyStartup();
-        }
-
-        void ApplyStartup()
-        {
-            using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
-            if (key == null) return;
-            if (RunAtStartup)
-                key.SetValue("ParaphraseTool", $"\"{Environment.ProcessPath}\"");
-            else
-                key.DeleteValue("ParaphraseTool", throwOnMissingValue: false);
+            StartupRegistration.Apply(RunAtStartup);
         }
     }
 }

@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 
-namespace ParaphraseTool
+namespace ParaphraseTool.Platform
 {
     static class Native
     {

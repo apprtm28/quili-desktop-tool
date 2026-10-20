@@ -3,8 +3,10 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using ParaphraseTool.Core;
+using ParaphraseTool.Platform;
 
-namespace ParaphraseTool
+namespace ParaphraseTool.UI
 {
     /// <summary>A small always-on-top button that never takes keyboard focus from the field it sits on.</summary>
     public partial class OverlayWindow : Window

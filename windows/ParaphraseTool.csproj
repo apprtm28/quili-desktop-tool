@@ -13,6 +13,12 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
+  <!-- App.xaml lives under src/, so the SDK doesn't pick it up as the application definition on its own. -->
+  <ItemGroup>
+    <Page Remove="src\App.xaml" />
+    <ApplicationDefinition Include="src\App.xaml" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>

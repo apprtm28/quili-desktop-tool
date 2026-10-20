@@ -1,6 +1,7 @@
 using System.Windows;
+using ParaphraseTool.Core;
 
-namespace ParaphraseTool
+namespace ParaphraseTool.UI
 {
     public partial class SettingsWindow : Window
     {

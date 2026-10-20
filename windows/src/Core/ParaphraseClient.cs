@@ -5,7 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ParaphraseTool
+namespace ParaphraseTool.Core
 {
     public static class ParaphraseClient
     {

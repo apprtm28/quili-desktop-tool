@@ -4,8 +4,9 @@ using System.Diagnostics;
 using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
+using ParaphraseTool.Core;
 
-namespace ParaphraseTool
+namespace ParaphraseTool.Platform
 {
     public sealed record TextTarget(AutomationElement Element, Rect Bounds);
 

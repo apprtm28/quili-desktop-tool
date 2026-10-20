@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 
-namespace ParaphraseTool
+namespace ParaphraseTool.Core
 {
     /// <summary>Tiny append-only log at %APPDATA%\ParaphraseTool\debug.log for diagnosing field detection.</summary>
     public static class DebugLog
