@@ -1,0 +1,12 @@
+<Window x:Class="ParaphraseTool.OverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        Topmost="True" ShowInTaskbar="False" ShowActivated="False" ResizeMode="NoResize"
+        Focusable="False" Width="20" Height="20">
+    <Border x:Name="Chip" CornerRadius="10" Background="#4F46E5" BorderBrush="White" BorderThickness="1"
+            Cursor="Hand" ToolTip="Paraphrase text" MouseLeftButtonUp="Chip_MouseLeftButtonUp">
+        <TextBlock x:Name="Glyph" Text="✦" Foreground="White" FontSize="11"
+                   FontFamily="Segoe UI Symbol" HorizontalAlignment="Center" VerticalAlignment="Center" />
+    </Border>
+</Window>

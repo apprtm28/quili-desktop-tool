@@ -1,0 +1,71 @@
+import AppKit
+
+@MainActor
+final class SettingsWindow: NSObject, NSWindowDelegate {
+    private let settings: Settings
+    private let window: NSWindow
+    private let server = NSTextField()
+    private let key = NSSecureTextField()
+    private let style = NSTextField()
+    private let startup = NSButton(checkboxWithTitle: "Start at login", target: nil, action: nil)
+
+    init(settings: Settings) {
+        self.settings = settings
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 260),
+                          styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        super.init()
+        window.title = "Paraphrase Tool – Settings"
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+
+        let save = NSButton(title: "Save", target: self, action: #selector(saveClicked))
+        save.keyEquivalent = "\r"
+        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelClicked))
+        cancel.keyEquivalent = "\u{1b}"
+        let buttons = NSStackView(views: [cancel, save])
+        buttons.spacing = 8
+
+        let stack = NSStackView(views: [
+            label("Server URL"), server, label("API key"), key, label("Paraphrase style"), style, startup, buttons,
+        ])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 6
+        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        stack.setCustomSpacing(14, after: server)
+        stack.setCustomSpacing(14, after: key)
+        stack.setCustomSpacing(14, after: style)
+        stack.setCustomSpacing(16, after: startup)
+        for field in [server, key, style] { field.widthAnchor.constraint(equalToConstant: 408).isActive = true }
+        buttons.setHuggingPriority(.required, for: .horizontal)
+
+        window.contentView = stack
+        window.setContentSize(stack.fittingSize)
+    }
+
+    private func label(_ text: String) -> NSTextField {
+        let l = NSTextField(labelWithString: text)
+        l.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+        return l
+    }
+
+    func show() {
+        server.stringValue = settings.serverUrl
+        key.stringValue = settings.apiKey
+        style.stringValue = settings.style
+        startup.state = settings.runAtStartup ? .on : .off
+        window.center()
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func saveClicked() {
+        settings.apiKey = key.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        settings.serverUrl = ParaphraseClient.normalize(server.stringValue)
+        settings.style = style.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        settings.runAtStartup = startup.state == .on
+        window.close()
+    }
+
+    @objc private func cancelClicked() { window.close() }
+}

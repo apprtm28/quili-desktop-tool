@@ -1,0 +1,18 @@
+# .NET build output
+bin/
+obj/
+dist/
+*.user
+.vs/
+
+# Swift / macOS
+.build/
+mac/dist/
+.swiftpm/
+*.xcodeproj/xcuserdata/
+.DS_Store
+
+# Logs, local settings and secrets
+*.log
+settings.json
+.env
