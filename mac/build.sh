@@ -33,8 +33,18 @@ iconutil -c icns Icon/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
 VERSION="$(tr -d '[:space:]' < ../VERSION)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
 
-# Ad-hoc signature so macOS keeps the Accessibility permission tied to this bundle.
-codesign --force --deep --sign - "$APP"
+# Sign with the stable "ParaphraseTool Dev" certificate (see make-signing-cert.sh) so macOS keeps the Accessibility
+# permission across rebuilds. Without it the bundle gets an ad-hoc signature, which changes with every build and
+# makes macOS forget the permission.
+IDENTITY="${SIGN_IDENTITY:-ParaphraseTool Dev}"
+if security find-identity -v -p codesigning | grep -q "\"$IDENTITY\""; then
+    codesign --force --deep --sign "$IDENTITY" "$APP"
+    echo "Signed with \"$IDENTITY\"."
+else
+    codesign --force --deep --sign - "$APP"
+    echo "warning: no \"$IDENTITY\" certificate found; signed ad-hoc, so Accessibility must be re-granted after each rebuild." >&2
+    echo "         Run mac/make-signing-cert.sh once to fix that." >&2
+fi
 
 echo "Done: $(cd "$OUT" && pwd)/ParaphraseTool.app (version $VERSION)"
 if [[ "${1:-}" != "nolaunch" ]]; then open "$APP"; fi

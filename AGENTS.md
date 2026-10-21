@@ -52,7 +52,7 @@ Keep this list current. Anything not listed here is expected to match.
 
 ## Practical notes
 
-- The macOS app is ad-hoc signed, so after a rebuild macOS may stop honoring its Accessibility permission: remove and re-add `dist/mac/ParaphraseTool.app` in System Settings → Privacy & Security → Accessibility.
+- `mac/build.sh` signs with the self-signed "ParaphraseTool Dev" certificate when it exists in the keychain (create it once with `mac/make-signing-cert.sh`), otherwise ad-hoc. With an ad-hoc signature macOS forgets the Accessibility permission after every rebuild: remove and re-add `dist/mac/ParaphraseTool.app` in System Settings → Privacy & Security → Accessibility. Never commit `.p12` / `.pem` / `.key` files.
 - `dist/` is build output and is not tracked.
 - The version comes from the `VERSION` file; both build scripts stamp it into the app.
 - Don't commit unless asked.

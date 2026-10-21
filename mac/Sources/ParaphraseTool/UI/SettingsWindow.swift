@@ -435,7 +435,7 @@ final class SettingsWindow: NSObject, NSTextViewDelegate {
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
-        window.makeFirstResponder(server)
+        _ = window.makeFirstResponder(server)
     }
 
     /// Switches the API key between dots and plain text, carrying what was typed across.
@@ -451,7 +451,7 @@ final class SettingsWindow: NSObject, NSTextViewDelegate {
         eye.path = reveal ? Glyph.eye : Glyph.eyeOff
         guard focus else { return }
         let field = reveal ? keyPlain : keySecure
-        window.makeFirstResponder(field)
+        _ = window.makeFirstResponder(field)
         field.currentEditor()?.selectedRange = NSRange(location: field.stringValue.utf16.count, length: 0)
     }
 

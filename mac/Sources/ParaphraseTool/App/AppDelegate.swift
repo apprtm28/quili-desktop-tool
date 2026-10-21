@@ -21,7 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildStatusItem()
 
         // Accessibility permission is required to read other apps' fields and to send Cmd+V.
-        AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+        let trusted = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+        DebugLog.write("started \(AppInfo.version); accessibility \(trusted ? "granted" : "NOT granted (System Settings → Privacy & Security → Accessibility)")")
 
         controller.onOpenSettings = { [weak self] in self?.openSettings() }
         controller.start()

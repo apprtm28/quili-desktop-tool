@@ -15,3 +15,6 @@ dist/
 *.log
 settings.json
 .env
+*.p12
+*.pem
+*.key

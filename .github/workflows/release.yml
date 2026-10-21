@@ -60,6 +60,26 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      # Optional: sign with the same self-signed certificate as local builds so users keep their Accessibility
+      # permission across updates. Add repo secrets MACOS_CERT_P12 (base64 of the .p12) and MACOS_CERT_PASSWORD
+      # (see mac/make-signing-cert.sh --export). Without them the app is ad-hoc signed.
+      - name: Import signing certificate
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          if [ -z "$CERT_P12" ]; then echo "No signing certificate configured; the app will be ad-hoc signed."; exit 0; fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"; pw="$(uuidgen)"
+          security create-keychain -p "$pw" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$pw" "$keychain"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          openssl pkcs12 -in "$RUNNER_TEMP/cert.p12" -clcerts -nokeys -passin "pass:$CERT_PASSWORD" -out "$RUNNER_TEMP/cert.pem" 2>/dev/null
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$pw" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/cert.pem"
       - name: Build (universal .app)
         run: ./build.sh mac nolaunch
       - name: Zip the app
