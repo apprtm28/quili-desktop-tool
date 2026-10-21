@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Creates the self-signed code-signing certificate "ParaphraseTool Dev" in your login keychain (one-time setup).
+# Creates the self-signed code-signing certificate "Quili Dev" in your login keychain (one-time setup).
 #
 #   ./make-signing-cert.sh             create it and trust it for code signing
-#   ./make-signing-cert.sh --export    also write ParaphraseToolDev.p12 + print the GitHub secrets to add
+#   ./make-signing-cert.sh --export    also write QuiliDev.p12 + print the GitHub secrets to add
 #
 # Every build signed with the same certificate has the same identity to macOS, so the Accessibility permission
 # and Keychain access you grant once keep working after a rebuild (an ad-hoc signature changes with every build).
@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-NAME="${SIGN_IDENTITY:-ParaphraseTool Dev}"
+NAME="${SIGN_IDENTITY:-Quili Dev}"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 EXPORT=0; [[ "${1:-}" == "--export" ]] && EXPORT=1
 
@@ -64,11 +64,11 @@ echo "Done. build.sh will now sign with \"$NAME\"."
 echo "The first build may ask to let codesign use the key: choose Always Allow."
 
 if [[ $EXPORT -eq 1 ]]; then
-    OUT="$PWD/ParaphraseToolDev.p12"
+    OUT="$PWD/QuiliDev.p12"
     CI_PASS="$(uuidgen)"
     /usr/bin/openssl pkcs12 -export -inkey "$WORK/key.pem" -in "$WORK/cert.pem" -name "$NAME" -out "$OUT" -passout "pass:$CI_PASS"
     echo
     echo "Wrote $OUT (keep it private; *.p12 is git-ignored). For signed GitHub releases add two repo secrets:"
-    echo "  MACOS_CERT_P12      = $(base64 < "$OUT" | tr -d '\n' | cut -c1-24)...   (full value: base64 < ParaphraseToolDev.p12)"
+    echo "  MACOS_CERT_P12      = $(base64 < "$OUT" | tr -d '\n' | cut -c1-24)...   (full value: base64 < QuiliDev.p12)"
     echo "  MACOS_CERT_PASSWORD = $CI_PASS"
 fi

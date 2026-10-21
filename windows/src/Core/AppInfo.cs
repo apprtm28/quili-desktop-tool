@@ -1,10 +1,10 @@
 using System.Reflection;
 
-namespace ParaphraseTool.Core
+namespace Quili.Core
 {
     public static class AppInfo
     {
-        public const string RepoUrl = "https://github.com/ferdinandimas/desktop-tools";
+        public const string RepoUrl = "https://github.com/ferdinandimas/quili-desktop-tool";
 
         /// <summary>The version from the repo's VERSION file, e.g. "1.0.0".</summary>
         public static string Version { get; } = ReadVersion();

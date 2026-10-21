@@ -1,7 +1,7 @@
 using System;
 using System.Text;
 
-namespace ParaphraseTool.Core
+namespace Quili.Core
 {
     /// <summary>
     /// Guards against text that UI Automation hands back damaged around emoji: U+FFFC (an embedded image such

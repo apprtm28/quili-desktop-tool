@@ -6,10 +6,10 @@ using System.Windows.Media;
 using System.Windows.Controls;
 using System.Windows.Media.Animation;
 using System.Diagnostics;
-using ParaphraseTool.Core;
-using ParaphraseTool.Platform;
+using Quili.Core;
+using Quili.Platform;
 
-namespace ParaphraseTool.UI
+namespace Quili.UI
 {
     /// <summary>
     /// A small always-on-top button that never takes keyboard focus from the field it sits on. Hovering it

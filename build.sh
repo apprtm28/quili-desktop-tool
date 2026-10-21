@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Builds ParaphraseTool for Windows (windows/) and macOS (mac/).
+# Builds Quili for Windows (windows/) and macOS (mac/).
 #
 #   ./build.sh [windows|mac|all] [debug] [nolaunch]
 #
 #   (no args)     build every platform this machine can: Windows always (needs the .NET 8 SDK),
 #                 macOS only when run on a Mac (needs Xcode / Command Line Tools)
-#   windows       Release publish -> dist/windows/ParaphraseTool.exe
-#   mac           Release build   -> dist/mac/ParaphraseTool.app
+#   windows       Release publish -> dist/windows/Quili.exe
+#   mac           Release build   -> dist/mac/Quili.app
 #   debug         compile-check only: no packaging, nothing is killed or launched
 #   nolaunch      don't start the freshly built app
 #

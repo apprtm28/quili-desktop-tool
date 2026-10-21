@@ -1,4 +1,4 @@
-namespace ParaphraseTool.Core
+namespace Quili.Core
 {
     /// <summary>What the overlay's buttons can ask the server to do with the field text.</summary>
     public enum TextAction

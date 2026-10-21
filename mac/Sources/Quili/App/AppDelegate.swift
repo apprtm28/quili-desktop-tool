@@ -41,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             item.button?.title = "✦"
         }
-        item.button?.toolTip = "Paraphrase Tool \(AppInfo.version)"
+        item.button?.toolTip = "Quili \(AppInfo.version)"
         let menu = NSMenu()
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         let pause = menu.addItem(withTitle: "Pause", action: #selector(togglePause(_:)), keyEquivalent: "")

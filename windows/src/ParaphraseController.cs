@@ -2,11 +2,11 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Threading;
-using ParaphraseTool.Core;
-using ParaphraseTool.Platform;
-using ParaphraseTool.UI;
+using Quili.Core;
+using Quili.Platform;
+using Quili.UI;
 
-namespace ParaphraseTool
+namespace Quili
 {
     public enum NoticeLevel { Info, Error }
 

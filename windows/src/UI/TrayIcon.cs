@@ -1,9 +1,9 @@
 using System;
 using System.Drawing;
 using System.Windows.Forms;
-using ParaphraseTool.Core;
+using Quili.Core;
 
-namespace ParaphraseTool.UI
+namespace Quili.UI
 {
     /// <summary>Notification-area icon with the Settings / Pause / Exit menu and balloon notices.</summary>
     public sealed class TrayIcon : IDisposable
@@ -22,7 +22,7 @@ namespace ParaphraseTool.UI
             _icon = new NotifyIcon
             {
                 Icon = LoadIcon(),
-                Text = $"Paraphrase Tool {AppInfo.Version}",
+                Text = $"Quili {AppInfo.Version}",
                 ContextMenuStrip = menu,
                 Visible = true,
             };

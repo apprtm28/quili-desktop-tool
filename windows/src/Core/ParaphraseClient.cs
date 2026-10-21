@@ -5,7 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace ParaphraseTool.Core
+namespace Quili.Core
 {
     public static class ParaphraseClient
     {

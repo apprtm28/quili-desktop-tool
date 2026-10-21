@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 
-namespace ParaphraseTool.Platform
+namespace Quili.Platform
 {
     static class Native
     {

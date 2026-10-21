@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds a universal (arm64 + x86_64) ParaphraseTool.app on macOS. Needs Xcode or the Command Line Tools.
-#   ./build.sh          # build ../dist/mac/ParaphraseTool.app and launch it
+# Builds a universal (arm64 + x86_64) Quili.app on macOS. Needs Xcode or the Command Line Tools.
+#   ./build.sh          # build ../dist/mac/Quili.app and launch it
 #   ./build.sh nolaunch # build only
 #   ./build.sh debug    # compile check only
 set -euo pipefail
@@ -17,26 +17,26 @@ if [[ "${1:-}" == "debug" ]]; then
     exit 0
 fi
 
-pkill -x ParaphraseTool 2>/dev/null && echo "Stopped running ParaphraseTool." || true
+pkill -x Quili 2>/dev/null && echo "Stopped running Quili." || true
 
 swift build -c release --arch arm64 --arch x86_64
-BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/ParaphraseTool"
+BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/Quili"
 
 OUT="../dist/mac"
-APP="$OUT/ParaphraseTool.app"
+APP="$OUT/Quili.app"
 rm -rf "$OUT"
 mkdir -p "$APP/Contents/MacOS"
-cp "$BIN" "$APP/Contents/MacOS/ParaphraseTool"
+cp "$BIN" "$APP/Contents/MacOS/Quili"
 cp Info.plist "$APP/Contents/Info.plist"
 mkdir -p "$APP/Contents/Resources"
 iconutil -c icns Icon/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
 VERSION="$(tr -d '[:space:]' < ../VERSION)"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
 
-# Sign with the stable "ParaphraseTool Dev" certificate (see make-signing-cert.sh) so macOS keeps the Accessibility
+# Sign with the stable "Quili Dev" certificate (see make-signing-cert.sh) so macOS keeps the Accessibility
 # permission across rebuilds. Without it the bundle gets an ad-hoc signature, which changes with every build and
 # makes macOS forget the permission.
-IDENTITY="${SIGN_IDENTITY:-ParaphraseTool Dev}"
+IDENTITY="${SIGN_IDENTITY:-Quili Dev}"
 if security find-identity -v -p codesigning | grep -q "\"$IDENTITY\""; then
     codesign --force --deep --sign "$IDENTITY" "$APP"
     echo "Signed with \"$IDENTITY\"."
@@ -46,5 +46,5 @@ else
     echo "         Run mac/make-signing-cert.sh once to fix that." >&2
 fi
 
-echo "Done: $(cd "$OUT" && pwd)/ParaphraseTool.app (version $VERSION)"
+echo "Done: $(cd "$OUT" && pwd)/Quili.app (version $VERSION)"
 if [[ "${1:-}" != "nolaunch" ]]; then open "$APP"; fi

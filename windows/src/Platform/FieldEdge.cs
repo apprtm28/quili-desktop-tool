@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
-using ParaphraseTool.Core;
+using Quili.Core;
 
-namespace ParaphraseTool.Platform
+namespace Quili.Platform
 {
     /// <summary>
     /// Finds where a text field's visible edge really is. UI Automation reports the focused element's bounds,

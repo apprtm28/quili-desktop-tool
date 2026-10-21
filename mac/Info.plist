@@ -2,11 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>Paraphrase Tool</string>
-    <key>CFBundleDisplayName</key><string>Paraphrase Tool</string>
-    <key>CFBundleIdentifier</key><string>com.ferdibot.paraphrasetool</string>
+    <key>CFBundleName</key><string>Quili</string>
+    <key>CFBundleDisplayName</key><string>Quili</string>
+    <key>CFBundleIdentifier</key><string>com.ferdinandimas.quili</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
-    <key>CFBundleExecutable</key><string>ParaphraseTool</string>
+    <key>CFBundleExecutable</key><string>Quili</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0.0</string>
     <key>CFBundleVersion</key><string>1</string>

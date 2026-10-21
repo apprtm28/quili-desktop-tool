@@ -4,10 +4,10 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Navigation;
-using ParaphraseTool.Platform;
-using ParaphraseTool.Core;
+using Quili.Platform;
+using Quili.Core;
 
-namespace ParaphraseTool.UI
+namespace Quili.UI
 {
     public partial class SettingsWindow : Window
     {

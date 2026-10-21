@@ -1,13 +1,13 @@
 using System;
 using System.IO;
 
-namespace ParaphraseTool.Core
+namespace Quili.Core
 {
-    /// <summary>Tiny append-only log at %APPDATA%\ParaphraseTool\debug.log for diagnosing field detection.</summary>
+    /// <summary>Tiny append-only log at %APPDATA%\Quili\debug.log for diagnosing field detection.</summary>
     public static class DebugLog
     {
         static readonly string FilePath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ParaphraseTool", "debug.log");
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Quili", "debug.log");
         static readonly object Gate = new();
 
         public static void Write(string message)

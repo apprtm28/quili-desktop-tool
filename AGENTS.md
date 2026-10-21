@@ -1,4 +1,4 @@
-# Paraphrase Tool: instructions for coding agents
+# Quili: instructions for coding agents
 
 One app, implemented twice: **Windows** (`windows/`, C# / WPF, .NET 8) and **macOS** (`mac/`, Swift / AppKit). See `README.md` for what it does and how to build it.
 
@@ -15,7 +15,7 @@ One app, implemented twice: **Windows** (`windows/`, C# / WPF, .NET 8) and **mac
 
 ### Where things live
 
-| Concern | Windows (`windows/src/`) | macOS (`mac/Sources/ParaphraseTool/`) |
+| Concern | Windows (`windows/src/`) | macOS (`mac/Sources/Quili/`) |
 |---|---|---|
 | Startup, single instance, menus/tray | `App.xaml.cs`, `UI/TrayIcon.cs` | `App/main.swift`, `App/AppDelegate.swift` |
 | Focus → read → request → replace flow | `ParaphraseController.cs` | `App/ParaphraseController.swift` |
@@ -48,11 +48,12 @@ Keep this list current. Anything not listed here is expected to match.
 - Text-field fonts: Segoe UI vs the system font.
 - Lone-surrogate cleanup exists only on Windows (Swift strings can't hold them).
 - Overlay cursor: the macOS overlay always shows the regular arrow pointer (requested). Windows still shows a hand over the actions and a size-all cursor on the green button.
-- Log location: `%APPDATA%\ParaphraseTool\debug.log` vs `~/Library/Logs/ParaphraseTool/debug.log`.
+- One-time migration from the app's former name "Paraphrase Tool": Windows copies `%APPDATA%\ParaphraseTool\settings.json` and moves the old `Run` entry; macOS copies the old `UserDefaults` domain `com.ferdibot.paraphrasetool` and the old Keychain item (macOS asks once to allow reading it). These legacy names are the only places the old name should remain.
+- Log location: `%APPDATA%\Quili\debug.log` vs `~/Library/Logs/Quili/debug.log`.
 
 ## Practical notes
 
-- `mac/build.sh` signs with the self-signed "ParaphraseTool Dev" certificate when it exists in the keychain (create it once with `mac/make-signing-cert.sh`), otherwise ad-hoc. With an ad-hoc signature macOS forgets the Accessibility permission after every rebuild: remove and re-add `dist/mac/ParaphraseTool.app` in System Settings → Privacy & Security → Accessibility. Never commit `.p12` / `.pem` / `.key` files.
+- `mac/build.sh` signs with the self-signed "Quili Dev" certificate when it exists in the keychain (create it once with `mac/make-signing-cert.sh`), otherwise ad-hoc. With an ad-hoc signature macOS forgets the Accessibility permission after every rebuild: remove and re-add `dist/mac/Quili.app` in System Settings → Privacy & Security → Accessibility. Never commit `.p12` / `.pem` / `.key` files.
 - `dist/` is build output and is not tracked.
 - The version comes from the `VERSION` file; both build scripts stamp it into the app.
 - Don't commit unless asked.

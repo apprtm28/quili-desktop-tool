@@ -4,9 +4,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using ParaphraseTool.Platform;
+using Quili.Platform;
 
-namespace ParaphraseTool.Core
+namespace Quili.Core
 {
     public class Settings
     {
@@ -26,8 +26,11 @@ namespace ParaphraseTool.Core
         public bool RunAtStartup { get; set; }
 
         static readonly string Dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ParaphraseTool");
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Quili");
         static readonly string FilePath = Path.Combine(Dir, "settings.json");
+        // Quili was called "Paraphrase Tool" before; its settings live here.
+        static readonly string LegacyFilePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ParaphraseTool", "settings.json");
 
         [JsonIgnore]
         public string ApiKey
@@ -64,8 +67,23 @@ namespace ParaphraseTool.Core
             }
         }
 
+        /// <summary>First launch after the rename: carry the old app's settings (server URL, instruction, API key, startup entry) over.</summary>
+        static void MigrateFromParaphraseTool()
+        {
+            try
+            {
+                if (File.Exists(FilePath) || !File.Exists(LegacyFilePath)) return;
+                Directory.CreateDirectory(Dir);
+                File.Copy(LegacyFilePath, FilePath); // the API key is DPAPI-protected per user, so it still decrypts
+                StartupRegistration.MigrateLegacy();
+                DebugLog.Write("migrated settings from the old Paraphrase Tool app");
+            }
+            catch (Exception) { }
+        }
+
         public static Settings Load()
         {
+            MigrateFromParaphraseTool();
             try
             {
                 if (File.Exists(FilePath))

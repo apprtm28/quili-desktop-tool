@@ -1,9 +1,9 @@
 import Foundation
 
-/// Append-only log at ~/Library/Logs/ParaphraseTool/debug.log for diagnosing field detection.
+/// Append-only log at ~/Library/Logs/Quili/debug.log for diagnosing field detection.
 enum DebugLog {
     static let url: URL = {
-        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/ParaphraseTool")
+        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Quili")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("debug.log")
     }()

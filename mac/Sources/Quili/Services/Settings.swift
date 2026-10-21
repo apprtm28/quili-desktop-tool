@@ -13,7 +13,39 @@ final class Settings {
     ]
     static let maxStyleLength = 1000
     private let defaults = UserDefaults.standard
-    private let service = "ParaphraseTool", account = "apiKey"
+    private let service = "Quili", account = "apiKey"
+    // Quili was called "Paraphrase Tool" before; its preferences and Keychain item live under these names.
+    private static let legacyDefaultsDomain = "com.ferdibot.paraphrasetool", legacyService = "ParaphraseTool"
+
+    init() { migrateFromParaphraseTool() }
+
+    /// First launch after the rename: carry the old app's server URL, instruction and API key over, once.
+    /// Reading the old Keychain item makes macOS ask once for permission (it belongs to the old app): choose Always Allow.
+    private func migrateFromParaphraseTool() {
+        let flag = "migratedFromParaphraseTool"
+        guard !defaults.bool(forKey: flag) else { return }
+        defaults.set(true, forKey: flag)
+
+        if defaults.object(forKey: "serverUrl") == nil, defaults.object(forKey: "style") == nil,
+           let old = defaults.persistentDomain(forName: Self.legacyDefaultsDomain) {
+            for key in ["serverUrl", "style"] { if let value = old[key] { defaults.set(value, forKey: key) } }
+            DebugLog.write("migrated settings from the old Paraphrase Tool app")
+        }
+        if apiKey.isEmpty, let legacyKey = readKey(service: Self.legacyService), !legacyKey.isEmpty {
+            apiKey = legacyKey
+            DebugLog.write("migrated the API key from the old Paraphrase Tool app")
+        }
+    }
+
+    private func readKey(service: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+            kSecAttrAccount as String: account, kSecReturnData as String: true,
+        ]
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
 
     var serverUrl: String {
         get { defaults.string(forKey: "serverUrl") ?? "" }
@@ -48,16 +80,7 @@ final class Settings {
     }
 
     var apiKey: String {
-        get {
-            let query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                kSecAttrAccount as String: account, kSecReturnData as String: true,
-            ]
-            var out: CFTypeRef?
-            guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess,
-                  let data = out as? Data else { return "" }
-            return String(data: data, encoding: .utf8) ?? ""
-        }
+        get { readKey(service: service) ?? "" }
         set {
             let base: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,

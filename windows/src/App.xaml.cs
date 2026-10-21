@@ -1,9 +1,9 @@
 using System.Threading;
 using System.Windows;
-using ParaphraseTool.Core;
-using ParaphraseTool.UI;
+using Quili.Core;
+using Quili.UI;
 
-namespace ParaphraseTool
+namespace Quili
 {
     public partial class App : System.Windows.Application
     {
@@ -16,7 +16,7 @@ namespace ParaphraseTool
         {
             base.OnStartup(e);
 
-            _singleInstance = new Mutex(true, "ParaphraseTool.SingleInstance", out bool isNew);
+            _singleInstance = new Mutex(true, "Quili.SingleInstance", out bool isNew);
             if (!isNew) { Shutdown(); return; }
 
             _settings = Settings.Load();

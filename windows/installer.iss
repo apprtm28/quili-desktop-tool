@@ -5,22 +5,22 @@
 
 [Setup]
 SetupIconFile=assets\app.ico
-UninstallDisplayIcon={app}\ParaphraseTool.exe
-AppName=Paraphrase Tool
+UninstallDisplayIcon={app}\Quili.exe
+AppName=Quili
 AppVersion={#AppVersion}
-DefaultDirName={autopf}\ParaphraseTool
-DefaultGroupName=Paraphrase Tool
+DefaultDirName={autopf}\Quili
+DefaultGroupName=Quili
 OutputDir=..\dist\windows
-OutputBaseFilename=ParaphraseToolSetup-{#AppVersion}
+OutputBaseFilename=QuiliSetup-{#AppVersion}
 PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64compatible
 Compression=lzma2
 
 [Files]
-Source: "..\dist\windows\ParaphraseTool.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\windows\Quili.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Paraphrase Tool"; Filename: "{app}\ParaphraseTool.exe"
+Name: "{group}\Quili"; Filename: "{app}\Quili.exe"
 
 [Run]
-Filename: "{app}\ParaphraseTool.exe"; Description: "Launch Paraphrase Tool"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Quili.exe"; Description: "Launch Quili"; Flags: nowait postinstall skipifsilent

@@ -48,8 +48,8 @@ jobs:
         run: |
           version="$(tr -d '[:space:]' < VERSION)"
           mkdir -p out
-          cp dist/windows/ParaphraseTool.exe "out/ParaphraseTool-v${version}-win-x64.exe"
-          cp "dist/windows/ParaphraseToolSetup-${version}.exe" "out/ParaphraseTool-Setup-v${version}.exe"
+          cp dist/windows/Quili.exe "out/Quili-v${version}-win-x64.exe"
+          cp "dist/windows/QuiliSetup-${version}.exe" "out/Quili-Setup-v${version}.exe"
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -86,7 +86,7 @@ jobs:
         run: |
           version="$(tr -d '[:space:]' < VERSION)"
           mkdir -p out
-          ditto -c -k --keepParent dist/mac/ParaphraseTool.app "out/ParaphraseTool-v${version}-macos.zip"
+          ditto -c -k --keepParent dist/mac/Quili.app "out/Quili-v${version}-macos.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: macos
@@ -107,5 +107,5 @@ jobs:
         run: |
           gh release create "${GITHUB_REF_NAME}" out/* \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "Paraphrase Tool ${GITHUB_REF_NAME}" \
+            --title "Quili ${GITHUB_REF_NAME}" \
             --generate-notes

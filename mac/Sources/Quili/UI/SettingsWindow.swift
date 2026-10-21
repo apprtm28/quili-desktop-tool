@@ -255,7 +255,7 @@ final class SettingsWindow: NSObject, NSTextViewDelegate {
         // Header: 90 tall.
         let header = HeaderView(frame: NSRect(x: 0, y: 0, width: width, height: 90))
         let robot = RobotBadge(frame: NSRect(x: pad, y: 20, width: 50, height: 50))
-        let title = label("Desktop Text Tool", size: 23, weight: .bold, color: Brand.ink)
+        let title = label("Quili", size: 23, weight: .bold, color: Brand.ink)
         let subtitle = label("Settings", size: 15, color: Brand.muted)
         let titleTop = 20 + (50 - (title.frame.height + subtitle.frame.height)) / 2
         title.setFrameOrigin(NSPoint(x: pad + 50 + 16, y: titleTop))
@@ -357,7 +357,7 @@ final class SettingsWindow: NSObject, NSTextViewDelegate {
         gitBadge.frame.origin = NSPoint(x: pad, y: y)
         let repoLabel = label("Repository", size: 15, color: Brand.muted)
         repoLabel.setFrameOrigin(NSPoint(x: labelX, y: y + (34 - repoLabel.frame.height) / 2))
-        let link = LinkView(title: "github.com/ferdinandimas/desktop-tools")
+        let link = LinkView(title: "github.com/ferdinandimas/quili-desktop-tool")
         link.setFrameOrigin(NSPoint(x: repoLabel.frame.maxX + 18, y: y + (34 - link.frame.height) / 2))
         let openIcon = GlyphLabel(path: Glyph.openNew, color: Brand.greenInk, side: 14)
         openIcon.frame.origin = NSPoint(x: link.frame.maxX + 8, y: y + 10)
@@ -403,7 +403,7 @@ final class SettingsWindow: NSObject, NSTextViewDelegate {
 
         window = SettingsPanel(contentRect: root.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = root
-        window.title = "Desktop Text Tool – Settings"
+        window.title = "Quili – Settings"
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false

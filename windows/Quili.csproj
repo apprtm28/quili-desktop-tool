@@ -7,8 +7,8 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
-    <AssemblyName>ParaphraseTool</AssemblyName>
-    <RootNamespace>ParaphraseTool</RootNamespace>
+    <AssemblyName>Quili</AssemblyName>
+    <RootNamespace>Quili</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>assets\app.ico</ApplicationIcon>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>

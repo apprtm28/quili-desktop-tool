@@ -4,9 +4,9 @@ using System.Diagnostics;
 using System.Threading;
 using System.Windows;
 using System.Windows.Automation;
-using ParaphraseTool.Core;
+using Quili.Core;
 
-namespace ParaphraseTool.Platform
+namespace Quili.Platform
 {
     public sealed record TextTarget(AutomationElement Element, Rect Bounds);
 

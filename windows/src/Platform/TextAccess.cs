@@ -3,9 +3,9 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Automation;
 using System.Windows.Automation.Text;
-using ParaphraseTool.Core;
+using Quili.Core;
 
-namespace ParaphraseTool.Platform
+namespace Quili.Platform
 {
     public sealed record FieldText(string Text, bool IsSelection, TextPatternRange? Range = null);
 
