@@ -130,6 +130,9 @@ namespace ParaphraseTool.UI
             _size = (int)Math.Round(CollapsedDip * scale);
             int margin = (int)Math.Round(MarginDip * scale);
 
+            // Narrow fields (up to 5x the button) would be covered by the expanded pill: show nothing.
+            if (bounds.Width <= _size * 5) { HideOverlay(); return; }
+
             int x = (int)bounds.Right - _size - margin;
             // Short fields (up to 3x the button) get the button centred; taller ones keep it bottom-right.
             int y = bounds.Height <= _size * 3

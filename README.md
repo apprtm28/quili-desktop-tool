@@ -45,6 +45,19 @@ cd windows
 ```
 Then compile `windows\installer.iss` with [Inno Setup](https://jrsoftware.org/isinfo.php) to get `windows\dist\ParaphraseToolSetup.exe`.
 
+## Releases
+Downloads are on the repo's **Releases** page: `ParaphraseTool-Setup-vX.Y.Z.exe` (Windows installer), `ParaphraseTool-vX.Y.Z-win-x64.exe` (portable) and `ParaphraseTool-vX.Y.Z-macos.zip` (universal app).
+
+To publish a release (GitHub Actions builds both platforms with the same `build.sh` scripts, so you don't need a Mac):
+```bash
+echo 1.1.0 > VERSION            # bump the version
+git commit -am "Release 1.1.0" && git push
+git tag v$(cat VERSION) && git push origin v$(cat VERSION)
+```
+The workflow (`.github/workflows/release.yml`) refuses a tag that doesn't match `VERSION`. It can also be run by hand from the Actions tab to just build the artifacts.
+
+The builds aren't code-signed, so first launch shows a warning: on Windows choose *More info → Run anyway* (SmartScreen); on macOS right-click the app and choose *Open*, or run `xattr -dr com.apple.quarantine ParaphraseTool.app`.
+
 ## Notes / limitations
 - Chrome and Electron expose UI Automation only when an accessibility client is detected; the tool triggers this automatically, but the first focus after launching Chrome/Slack may need a click or two. If Slack doesn't show the button, start it with `--force-renderer-accessibility`.
 - Apps running as Administrator can't be read unless this tool is also run as Administrator.

@@ -1,0 +1,91 @@
+name: Release
+
+# Publishes a GitHub Release with the Windows and macOS builds when a version tag is pushed:
+#   git tag v$(cat VERSION) && git push origin v$(cat VERSION)
+# It runs the same build scripts used locally (windows/build.sh, mac/build.sh).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:   # manual run: builds and uploads the artifacts, but doesn't publish a release
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must match the VERSION file
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match VERSION (v${version}). Bump VERSION, commit, and re-tag." >&2
+            exit 1
+          fi
+
+  windows:
+    needs: check-version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build (self-contained single-file exe)
+        shell: bash
+        run: ./build.sh windows nolaunch
+      - name: Build installer (Inno Setup)
+        shell: bash
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          iscc="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          if [ ! -f "$iscc" ]; then choco install innosetup -y --no-progress; fi
+          "$iscc" "/DAppVersion=${version}" windows/installer.iss
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          mkdir -p out
+          cp windows/dist/ParaphraseTool.exe "out/ParaphraseTool-v${version}-win-x64.exe"
+          cp "windows/dist/ParaphraseToolSetup-${version}.exe" "out/ParaphraseTool-Setup-v${version}.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*
+
+  macos:
+    needs: check-version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (universal .app)
+        run: ./build.sh mac nolaunch
+      - name: Zip the app
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          mkdir -p out
+          ditto -c -k --keepParent mac/dist/ParaphraseTool.app "out/ParaphraseTool-v${version}-macos.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: out/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" out/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Paraphrase Tool ${GITHUB_REF_NAME}" \
+            --generate-notes

@@ -361,6 +361,8 @@ final class OverlayWindow {
     func show(at axFrame: CGRect) {
         guard let primary = NSScreen.screens.first else { return }
         let s = Self.size
+        // Narrow fields (up to 5x the button) would be covered by the expanded pill: show nothing.
+        if axFrame.width <= s * 5 { hide(); return }
         // AX y grows downward from the primary screen's top edge; Cocoa y grows upward from its bottom edge.
         var x = axFrame.maxX - s - Self.margin
         // Short fields (up to 3x the button) get the button centred; taller ones keep it bottom-right.
