@@ -2,12 +2,12 @@
 
 _Formerly "Paraphrase Tool". On first launch Quili copies the settings (server URL, API key, instruction, start-at-login) from the old location, so nothing needs re-entering._
 
-Windows tray app. When you focus a text field in any app (Chrome, Slack desktop, Notepad, …) a small ✦ button appears at the field's bottom-right. Click it and the full text of the field is paraphrased by the paraphrase API and replaced in place (Ctrl+Z undoes it).
+Windows tray app. When you focus a text field in any app (Chrome, Slack desktop, Notepad, …) a small ✦ button appears at the field's bottom-right. Click it and the selected text, or the full text of the field when nothing is selected, is paraphrased by the paraphrase API and replaced in place (Ctrl+Z undoes it).
 
 ## How it works
 - **Detection:** Windows UI Automation polls the focused element (`Platform/FocusTracker`) and shows a non-activating, always-on-top overlay (`UI/OverlayWindow`) so the field keeps focus.
-- **Read:** UIA `TextPattern`/`ValuePattern`, falling back to Ctrl+A / Ctrl+C.
-- **Write:** clipboard + Ctrl+A / Ctrl+V (works in Chromium/Electron editors). Your previous *text* clipboard is restored.
+- **Read:** the selection first (UIA `TextPattern`, or Ctrl+C when UIA can't report a selection), otherwise the whole field via `TextPattern`/`ValuePattern`, falling back to Ctrl+A / Ctrl+C.
+- **Write:** clipboard + Ctrl+V over the original selection (restored first; if it changed while the request ran, the result is copied to the clipboard instead), or Ctrl+A / Ctrl+V over the whole field when nothing was selected (works in Chromium/Electron editors). Your previous *text* clipboard is restored.
 - **Paraphrase:** `POST {server}/api/paraphrase` with an `X-API-Key` header; the server detects the language and replies in it. Set the server URL and API key in Settings. The API key is stored encrypted with Windows DPAPI in `%APPDATA%\Quili\settings.json`.
 - **Buttons:** the green round button (tooltip **Text Tool**) paraphrases on a click. Hovering it expands a pill with two actions: **EN** translates the text into natural, paraphrased English (`POST {server}/api/translate`, whatever the original language) and the sparkle **Paraphrase**, which follows the **Paraphrase instruction** from Settings (e.g. "make it formal", "shorter", "translate to Indonesian").
 - Settings also shows a link to this repository.
@@ -63,7 +63,7 @@ The builds aren't code-signed, so first launch shows a warning: on Windows choos
 ## Notes / limitations
 - Chrome and Electron expose UI Automation only when an accessibility client is detected; the tool triggers this automatically, but the first focus after launching Chrome/Slack may need a click or two. If Slack doesn't show the button, start it with `--force-renderer-accessibility`.
 - Apps running as Administrator can't be read unless this tool is also run as Administrator.
-- Replacing uses Ctrl+A, so the field is fully replaced (that's the intended "paraphrase everything" behavior).
+- With nothing selected, replacing uses Ctrl+A, so the field is fully replaced (that's the intended "paraphrase everything" behavior). Select part of the text to change only that part.
 
 ## Building both
 `./build.sh` (repo root) builds every platform the current machine supports: Windows always (needs the .NET 8 SDK), macOS only on a Mac. Options: `./build.sh [windows|mac|all] [debug] [nolaunch]`. On WSL/Linux the macOS build is skipped.
