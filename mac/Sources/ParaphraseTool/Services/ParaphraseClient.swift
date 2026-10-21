@@ -10,7 +10,7 @@ enum ParaphraseClient {
     private static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 45
-        config.timeoutIntervalForResource = 50
+        config.timeoutIntervalForResource = 45
         config.waitsForConnectivity = false
         return URLSession(configuration: config)
     }()
@@ -50,12 +50,9 @@ enum ParaphraseClient {
         DebugLog.write("\(action) request: POST \(url) (\(TextHygiene.describe(text)))")
         let (data, resp): (Data, URLResponse)
         do {
-            (data, resp) = try await session.data(for: req)
-        } catch let error as URLError where [.networkConnectionLost, .cannotConnectToHost, .notConnectedToInternet,
-                                              .dnsLookupFailed, .secureConnectionFailed].contains(error.code) {
-            // Connection-level failure (no HTTP response at all): safe to try once more.
-            DebugLog.write("\(action) connection failed (\(error.localizedDescription)); retrying once")
-            (data, resp) = try await session.data(for: req)
+            (data, resp) = try await send(req, action: action)
+        } catch let error as URLError where error.code == .timedOut {
+            throw ParaphraseError(message: "The server took too long to respond.")
         }
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         DebugLog.write("\(action) response: HTTP \(status)")
@@ -63,7 +60,11 @@ enum ParaphraseClient {
         let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         guard (200..<300).contains(status) else {
             var msg = String(data: data, encoding: .utf8) ?? ""
-            if let detail = json?["detail"] { msg = (detail as? String) ?? "\(detail)" }
+            if let detail = json?["detail"] {
+                if let text = detail as? String { msg = text }
+                else if let raw = try? JSONSerialization.data(withJSONObject: detail, options: [.fragmentsAllowed]),
+                        let text = String(data: raw, encoding: .utf8) { msg = text }
+            }
             throw ParaphraseError(message: "\(action.verb) server error \(status): \(msg)")
         }
         guard let out = (json?["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !out.isEmpty else {
@@ -71,5 +72,16 @@ enum ParaphraseClient {
         }
         DebugLog.write("\(action) result: \(TextHygiene.describe(out))")
         return out
+    }
+
+    /// One try, plus one more after a connection-level failure (no HTTP response at all).
+    private static func send(_ req: URLRequest, action: TextAction) async throws -> (Data, URLResponse) {
+        do {
+            return try await session.data(for: req)
+        } catch let error as URLError where [.networkConnectionLost, .cannotConnectToHost, .cannotFindHost,
+                                              .notConnectedToInternet, .dnsLookupFailed, .secureConnectionFailed].contains(error.code) {
+            DebugLog.write("\(action) connection failed (\(error.localizedDescription)); retrying once")
+            return try await session.data(for: req)
+        }
     }
 }

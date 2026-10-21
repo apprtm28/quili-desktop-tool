@@ -9,11 +9,9 @@ struct FieldText {
 
 /// Reads and replaces text in the focused field. Reading prefers the Accessibility API; replacing goes
 /// through the pasteboard + Cmd+A/V, which works in web and Electron editors where setting AXValue does not
-/// trigger the page's input handlers. Must run on the main actor.
-@MainActor
+/// trigger the page's input handlers. Deliberately not main-actor: the Accessibility calls can block for seconds
+/// on an unresponsive target app, and that must not freeze the overlay's spinner and Cancel button.
 enum TextAccess {
-    private static let keyA: CGKeyCode = 0, keyC: CGKeyCode = 8, keyV: CGKeyCode = 9
-
     static func read(_ el: AXUIElement) async -> FieldText {
         let selectionAttr = AX.attr(el, kAXSelectedTextAttribute)
         if let sel = selectionAttr as? String, !isBlank(sel) {
@@ -36,12 +34,12 @@ enum TextAccess {
         if let whole = AX.string(el, kAXValueAttribute), !isBlank(whole) {
             if !TextHygiene.isUnreliable(whole) { return FieldText(text: whole, isSelection: false, range: nil) }
             DebugLog.write("AX text damaged (\(TextHygiene.describe(whole))); reading via pasteboard")
-            pressCommand(keyA)
+            pressCommand("a")
             let copied = await copySelection()
             return FieldText(text: isBlank(copied) ? whole : copied, isSelection: false, range: nil)
         }
 
-        pressCommand(keyA)
+        pressCommand("a")
         return FieldText(text: await copySelection(), isSelection: false, range: nil)
     }
 
@@ -55,20 +53,42 @@ enum TextAccess {
 
         let backup = NSPasteboard.general.string(forType: .string)
         setPasteboard(text)
-        if !field.isSelection { pressCommand(keyA) }
-        pressCommand(keyV)
-        try? await Task.sleep(nanoseconds: 300_000_000) // let the target read the pasteboard before restoring it
+        DebugLog.write("pasting (selectionOnly=\(field.isSelection))")
+        if !field.isSelection { pressCommand("a") }
+        pressCommand("v")
+        await Pause.milliseconds(400) // let the target app read the pasteboard before restoring it
+
+        // Confirm the paste landed; if not, leave the result on the pasteboard so it isn't lost.
+        if let after = AX.string(el, kAXValueAttribute), !after.isEmpty, !key(after).contains(key(text, max: 15)) {
+            DebugLog.write("paste did not land (field text unchanged)")
+            throw ParaphraseError(message:
+                "The text could not be replaced in this field. The result was copied to the clipboard; paste it with Cmd+V.")
+        }
+        DebugLog.write("paste verified")
         if let backup { setPasteboard(backup) }
     }
 
     private static func restoreSelection(_ field: FieldText, in el: AXUIElement) async -> Bool {
-        if let range = field.range,
-           AXUIElementSetAttributeValue(el, kAXSelectedTextRangeAttribute as CFString, range) == .success,
-           let now = AX.string(el, kAXSelectedTextAttribute), normalize(now) == normalize(field.text) {
-            return true
+        if let range = field.range {
+            if AXUIElementSetAttributeValue(el, kAXSelectedTextRangeAttribute as CFString, range) == .success {
+                if let now = AX.string(el, kAXSelectedTextAttribute), !now.isEmpty, key(now, max: 30) == key(field.text, max: 30) {
+                    DebugLog.write("selection restored via AX range")
+                    return true
+                }
+                DebugLog.write("AX range select did not reproduce the selection; comparing via pasteboard")
+            } else {
+                DebugLog.write("range select failed")
+            }
         }
         // No usable range: only proceed if the current selection is still the same text.
-        return normalize(await copySelection()) == normalize(field.text)
+        let same = normalize(await copySelection()) == normalize(field.text)
+        DebugLog.write("selection still the same via pasteboard: \(same)")
+        return same
+    }
+
+    /// Letters/digits only, so emoji placeholders and whitespace differences don't matter when comparing.
+    private static func key(_ s: String, max: Int = .max) -> String {
+        String(s.filter { $0.isLetter || $0.isNumber }.prefix(max)).lowercased()
     }
 
     /// Cmd+C and return what landed on the pasteboard (empty if nothing was selected).
@@ -77,8 +97,8 @@ enum TextAccess {
         let backup = pb.string(forType: .string)
         pb.clearContents()
         let before = pb.changeCount
-        pressCommand(keyC)
-        try? await Task.sleep(nanoseconds: 200_000_000)
+        pressCommand("c")
+        await Pause.milliseconds(200)
         let text = pb.changeCount != before ? (pb.string(forType: .string) ?? "") : ""
         if let backup { setPasteboard(backup) }
         return text
@@ -90,7 +110,9 @@ enum TextAccess {
         pb.setString(text, forType: .string)
     }
 
-    private static func pressCommand(_ key: CGKeyCode) {
+    /// Presses Cmd+letter, resolving the key from the current keyboard layout.
+    private static func pressCommand(_ letter: Character) {
+        let key = KeyboardLayout.keyCode(for: letter)
         let src = CGEventSource(stateID: .combinedSessionState)
         for down in [true, false] {
             let e = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: down)

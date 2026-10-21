@@ -35,9 +35,15 @@ final class Settings {
     var runAtStartup: Bool {
         get { SMAppService.mainApp.status == .enabled }
         set {
+            let service = SMAppService.mainApp
             do {
-                if newValue { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-            } catch { DebugLog.write("login item change failed: \(error)") }
+                // register() throws when already registered, so only act on a real change.
+                if newValue { if service.status != .enabled { try service.register() } }
+                else if service.status == .enabled { try service.unregister() }
+            } catch {
+                DebugLog.write("login item change failed: \(error)")
+                Notifier.show("Start at login failed", error.localizedDescription)
+            }
         }
     }
 

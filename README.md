@@ -71,6 +71,7 @@ A native Swift menu-bar app with the same behavior (✦ button on the focused fi
 
 - **Build (on a Mac with Xcode or the Command Line Tools):** `cd mac && ./build.sh` → `dist/mac/ParaphraseTool.app` (universal arm64 + x86_64), then it launches. `./build.sh nolaunch` only builds.
 - **Permission:** on first launch grant **System Settings → Privacy & Security → Accessibility** to Paraphrase Tool. Without it, no fields are detected and paste is blocked.
+- **Optional permission:** **Screen Recording** lets the docked button snap to a field's visible border (the Windows version samples screen pixels for this). Without it the button uses a fixed offset below the field.
 - **Detection:** the macOS Accessibility API (`AXUIElement`) instead of UI Automation; for Chromium/Electron apps it sets `AXEnhancedUserInterface`/`AXManualAccessibility` so Chrome and Slack expose their fields.
 - **Write:** pasteboard + Cmd+A / Cmd+V. The original selection is restored before pasting. Your previous text clipboard is restored.
 - **Storage:** server URL and style in UserDefaults, API key in the Keychain. Log: `~/Library/Logs/ParaphraseTool/debug.log`.

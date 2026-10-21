@@ -6,12 +6,6 @@ private final class OverlayPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
-private enum Palette {
-    static let green = NSColor(red: 0x3D / 255.0, green: 0xBE / 255.0, blue: 0x4A / 255.0, alpha: 1)
-    static let red = NSColor(red: 0xE5 / 255.0, green: 0x48 / 255.0, blue: 0x4D / 255.0, alpha: 1)
-    static let dark = NSColor(red: 0x1F / 255.0, green: 0x2A / 255.0, blue: 0x24 / 255.0, alpha: 1)
-}
-
 /// Draws the collapsed round button, and — as `expansion` goes 0 → 1 — a white pill growing to its left
 /// with the action buttons (Translate to English, Paraphrase).
 private final class OverlayView: NSView {
@@ -86,6 +80,7 @@ private final class OverlayView: NSView {
             pressed = nil
             onDragStart?()
         }
+        updateCursor()
         onDrag?(now.x - dragLast.x, now.y - dragLast.y)
         dragLast = now
     }
@@ -115,7 +110,12 @@ private final class OverlayView: NSView {
         return nil
     }
 
-    private func updateCursor() { (hovered == nil ? NSCursor.arrow : NSCursor.pointingHand).set() }
+    /// Always the regular arrow. The panel never becomes key and the app is usually inactive, so the app underneath
+    /// would otherwise keep its own cursor (the text I-beam) over the button; it is claimed on every pointer event.
+    private func updateCursor() { NSCursor.arrow.set() }
+
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .arrow) }
+    override func cursorUpdate(with event: NSEvent) { updateCursor() }
 
     private func startHoverAnimation() {
         guard hoverTimer == nil else { return }
@@ -127,16 +127,15 @@ private final class OverlayView: NSView {
     private func stepHover() {
         var settled = true
         for region in Region.allCases {
-            if !approach(&hoverAmount[region, default: 0], to: hovered == region ? 1 : 0) { settled = false }
-            if !approach(&pressAmount[region, default: 0], to: pressed == region ? 1 : 0) { settled = false }
+            if !approach(&hoverAmount[region, default: 0], to: hovered == region ? 1 : 0, step: 0.13) { settled = false }
+            if !approach(&pressAmount[region, default: 0], to: pressed == region ? 1 : 0, step: 0.24) { settled = false }
         }
         needsDisplay = true
         if settled { hoverTimer?.invalidate(); hoverTimer = nil }
     }
 
     /// Moves `value` one step toward `target`; true once it has arrived.
-    private func approach(_ value: inout CGFloat, to target: CGFloat) -> Bool {
-        let step: CGFloat = 0.22
+    private func approach(_ value: inout CGFloat, to target: CGFloat, step: CGFloat) -> Bool {
         if abs(target - value) <= step { value = target; return true }
         value += value < target ? step : -step
         return false
@@ -145,9 +144,9 @@ private final class OverlayView: NSView {
     /// Grows a hovered button and shrinks a pressed one, around `center`.
     private func drawScaled(_ region: Region, around center: NSPoint, _ body: () -> Void) {
         let hover = hoverAmount[region] ?? 0, press = pressAmount[region] ?? 0
-        // Docked to a field, the green button doesn't zoom.
-        let still = region == .circle && dock != .floating
-        let scale = still ? 1 : (1 + (region == .circle ? 0.08 : 0.14) * hover) * (1 - 0.12 * press)
+        // Idle while a request runs; docked to a field, the green button doesn't zoom either.
+        let still = busy || (region == .circle && dock != .floating)
+        let scale = still ? 1 : (1 + (region == .circle ? 0.08 : 0.10) * hover) * (1 - 0.12 * press)
         NSGraphicsContext.saveGraphicsState()
         let transform = NSAffineTransform()
         transform.translateX(by: center.x, yBy: center.y)
@@ -178,14 +177,16 @@ private final class OverlayView: NSView {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
         addTrackingArea(NSTrackingArea(rect: bounds,
-                                       options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
+                                       options: [.mouseEnteredAndExited, .mouseMoved, .cursorUpdate, .activeAlways, .inVisibleRect],
                                        owner: self, userInfo: nil))
     }
     override func mouseEntered(with event: NSEvent) {
+        updateCursor()
         onHover?(true)
         mouseMoved(with: event)
     }
     override func mouseMoved(with event: NSEvent) {
+        updateCursor()
         let region = region(at: convert(event.locationInWindow, from: nil))
         if busy {
             if region != .circle { cancelReady = true }
@@ -214,38 +215,35 @@ private final class OverlayView: NSView {
             pill.lineWidth = 1
             pill.stroke()
 
-            // Actions are anchored to the round button, so they slide out with the pill.
-            let paraphrase = NSRect(x: paraphraseMinX, y: 0, width: Self.actionWidth, height: h)
+            // Actions are anchored to the round button, so they slide out with the pill. Each is 36×26, centred.
+            let paraphrase = NSRect(x: paraphraseMinX, y: 1, width: Self.actionWidth, height: h - 2)
             let translate = paraphrase.offsetBy(dx: -Self.actionWidth, dy: 0)
             let settings = translate.offsetBy(dx: -Self.actionWidth, dy: 0)
 
-            // A soft green highlight fades in behind the hovered action.
             for (region, rect) in [(Region.paraphrase, paraphrase), (Region.translate, translate), (Region.settings, settings)] {
-                Palette.green.withAlphaComponent(0.18 * (hoverAmount[region] ?? 0) * actionAlpha).setFill()
-                // Same corner setting as the pill: square on the side docked to the field, soft on the other.
-                let r = dock == .floating ? 11 : Self.dockedRadius
-                Self.roundedPath(rect.insetBy(dx: 2, dy: 2),
-                                 top: dock == .belowField ? 0 : r, bottom: dock == .aboveField ? 0 : r).fill()
-            }
+                drawScaled(region, around: NSPoint(x: rect.midX, y: rect.midY)) {
+                    // A soft green highlight fades in behind the hovered action; same corners as the pill:
+                    // square on the side docked to the field, soft on the other.
+                    Brand.green.withAlphaComponent(0.18 * (hoverAmount[region] ?? 0) * actionAlpha).setFill()
+                    let r = dock == .floating ? rect.height / 2 : Self.dockedRadius
+                    Self.roundedPath(rect, top: dock == .belowField ? 0 : r, bottom: dock == .aboveField ? 0 : r).fill()
 
-            drawScaled(.paraphrase, around: NSPoint(x: paraphrase.midX, y: paraphrase.midY)) {
-                Palette.green.withAlphaComponent(actionAlpha).setFill()
-                Self.star(center: NSPoint(x: paraphrase.midX - 1, y: paraphrase.midY - 1), radius: 7).fill()
-                Self.star(center: NSPoint(x: paraphrase.midX + 6, y: paraphrase.midY + 6), radius: 3).fill()
-            }
-
-            drawScaled(.settings, around: NSPoint(x: settings.midX, y: settings.midY)) {
-                Palette.green.withAlphaComponent(actionAlpha).setFill()
-                Self.gear(center: NSPoint(x: settings.midX, y: settings.midY), radius: 7.5).fill()
-            }
-
-            drawScaled(.translate, around: NSPoint(x: translate.midX, y: translate.midY)) {
-                let label = NSAttributedString(string: "EN", attributes: [
-                    .font: NSFont.boldSystemFont(ofSize: 12),
-                    .foregroundColor: Palette.green.withAlphaComponent(actionAlpha),
-                ])
-                let size = label.size()
-                label.draw(at: NSPoint(x: translate.midX - size.width / 2, y: translate.midY - size.height / 2))
+                    let color = Brand.green.withAlphaComponent(actionAlpha)
+                    func glyph(_ path: NSBezierPath, _ side: CGFloat) {
+                        Glyph.fill(path, in: NSRect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: side, height: side),
+                                   color: color, viewBox: 24)
+                    }
+                    switch region {
+                    case .paraphrase: glyph(Glyph.sparkle, 18)
+                    case .settings: glyph(Glyph.gear, 17)
+                    default:
+                        let label = NSAttributedString(string: "EN", attributes: [
+                            .font: NSFont.boldSystemFont(ofSize: 12), .foregroundColor: color,
+                        ])
+                        let size = label.size()
+                        label.draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2))
+                    }
+                }
             }
         }
 
@@ -256,29 +254,30 @@ private final class OverlayView: NSView {
 
     private func drawCircleButton(_ circle: NSRect) {
         let cancel = busy ? hoverAmount[.circle] ?? 0 : 0
-        (Palette.green.blended(withFraction: cancel, of: Palette.red) ?? Palette.green).setFill()
+        (Brand.green.blended(withFraction: cancel, of: Brand.red) ?? Brand.green).setFill()
         let radius = dock == .floating ? min(circle.width, circle.height) / 2 : Self.dockedRadius
         Self.roundedPath(circle, top: dock == .belowField ? 0 : radius, bottom: dock == .aboveField ? 0 : radius).fill()
 
         if busy {
-            let spinner = circle.insetBy(dx: 6, dy: 6)
+            // A 14-point ring stroked 2 wide: the stroke is centred on a circle of radius 6.
+            let spinner = circle.insetBy(dx: 7, dy: 7)
             let center = NSPoint(x: spinner.midX, y: spinner.midY)
             let radius = spinner.width / 2
 
             let track = NSBezierPath(ovalIn: spinner)
             track.lineWidth = 2
-            Palette.dark.withAlphaComponent(0.2 * (1 - cancel)).setStroke()
+            Brand.robotInk.withAlphaComponent(0.2 * (1 - cancel)).setStroke()
             track.stroke()
 
             let arc = NSBezierPath()
-            arc.appendArc(withCenter: center, radius: radius, startAngle: spinAngle, endAngle: spinAngle + 100, clockwise: false)
+            arc.appendArc(withCenter: center, radius: radius, startAngle: spinAngle, endAngle: spinAngle + 105, clockwise: false)
             arc.lineWidth = 2
             arc.lineCapStyle = .round
-            Palette.dark.withAlphaComponent(1 - cancel).setStroke()
+            Brand.robotInk.withAlphaComponent(1 - cancel).setStroke()
             arc.stroke()
 
             if cancel > 0 {
-                let mark = circle.insetBy(dx: 9, dy: 9)
+                let mark = circle.insetBy(dx: 8.5, dy: 8.5) // a 12-point cross with 1.5 of margin, as on Windows
                 let cross = NSBezierPath()
                 cross.move(to: NSPoint(x: mark.minX, y: mark.minY)); cross.line(to: NSPoint(x: mark.maxX, y: mark.maxY))
                 cross.move(to: NSPoint(x: mark.minX, y: mark.maxY)); cross.line(to: NSPoint(x: mark.maxX, y: mark.minY))
@@ -288,7 +287,7 @@ private final class OverlayView: NSView {
                 cross.stroke()
             }
         } else {
-            Self.drawRobot(in: circle.insetBy(dx: 5, dy: 5))
+            Glyph.drawRobot(in: circle.insetBy(dx: 5, dy: 5))
         }
     }
 
@@ -318,59 +317,6 @@ private final class OverlayView: NSView {
         p.close()
         return p
     }
-
-    /// Cog with eight teeth and a hole in the middle.
-    private static func gear(center c: NSPoint, radius r: CGFloat) -> NSBezierPath {
-        let teeth = 8, step = 2 * CGFloat.pi / CGFloat(teeth), inner = r * 0.78
-        func point(_ radius: CGFloat, _ angle: CGFloat) -> NSPoint {
-            NSPoint(x: c.x + radius * cos(angle), y: c.y + radius * sin(angle))
-        }
-        let p = NSBezierPath()
-        for i in 0..<teeth {
-            let a = CGFloat(i) * step
-            let corners = [(inner, a - 0.30 * step), (r, a - 0.17 * step), (r, a + 0.17 * step), (inner, a + 0.30 * step)]
-            for (index, corner) in corners.enumerated() {
-                let pt = point(corner.0, corner.1)
-                if i == 0 && index == 0 { p.move(to: pt) } else { p.line(to: pt) }
-            }
-        }
-        p.close()
-        p.appendOval(in: NSRect(x: c.x - r * 0.38, y: c.y - r * 0.38, width: r * 0.76, height: r * 0.76))
-        p.windingRule = .evenOdd
-        return p
-    }
-
-    /// Four-point sparkle.
-    private static func star(center c: NSPoint, radius r: CGFloat) -> NSBezierPath {
-        let p = NSBezierPath()
-        let t = NSPoint(x: c.x, y: c.y + r), right = NSPoint(x: c.x + r, y: c.y)
-        let b = NSPoint(x: c.x, y: c.y - r), left = NSPoint(x: c.x - r, y: c.y)
-        p.move(to: t)
-        p.curve(to: right, controlPoint1: NSPoint(x: c.x + 0.12 * r, y: c.y + 0.45 * r), controlPoint2: NSPoint(x: c.x + 0.45 * r, y: c.y + 0.12 * r))
-        p.curve(to: b, controlPoint1: NSPoint(x: c.x + 0.45 * r, y: c.y - 0.12 * r), controlPoint2: NSPoint(x: c.x + 0.12 * r, y: c.y - 0.45 * r))
-        p.curve(to: left, controlPoint1: NSPoint(x: c.x - 0.12 * r, y: c.y - 0.45 * r), controlPoint2: NSPoint(x: c.x - 0.45 * r, y: c.y - 0.12 * r))
-        p.curve(to: t, controlPoint1: NSPoint(x: c.x - 0.45 * r, y: c.y + 0.12 * r), controlPoint2: NSPoint(x: c.x - 0.12 * r, y: c.y + 0.45 * r))
-        p.close()
-        return p
-    }
-
-    /// Little robot head, designed on a 24×24 canvas with a top-left origin.
-    private static func drawRobot(in rect: NSRect) {
-        func map(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat = 0, _ h: CGFloat = 0) -> NSRect {
-            NSRect(x: rect.minX + x / 24 * rect.width, y: rect.minY + (24 - y - h) / 24 * rect.height,
-                   width: w / 24 * rect.width, height: h / 24 * rect.height)
-        }
-        Palette.dark.setFill()
-        NSBezierPath(ovalIn: map(10.4, 1.6, 3.2, 3.2)).fill()
-        NSBezierPath(rect: map(11.2, 4, 1.6, 3.5)).fill()
-        NSBezierPath(roundedRect: map(2, 11, 3, 5), xRadius: 1.2, yRadius: 1.2).fill()
-        NSBezierPath(roundedRect: map(19, 11, 3, 5), xRadius: 1.2, yRadius: 1.2).fill()
-        NSBezierPath(roundedRect: map(4.5, 7, 15, 13), xRadius: 3.5, yRadius: 3.5).fill()
-        Palette.green.setFill()
-        NSBezierPath(ovalIn: map(8, 10.8, 3.2, 3.2)).fill()
-        NSBezierPath(ovalIn: map(12.8, 10.8, 3.2, 3.2)).fill()
-        NSBezierPath(roundedRect: map(9.5, 16.2, 5, 1.4), xRadius: 0.7, yRadius: 0.7).fill()
-    }
 }
 
 extension OverlayView: NSViewToolTipOwner {
@@ -388,7 +334,7 @@ extension OverlayView: NSViewToolTipOwner {
 
 @MainActor
 final class OverlayWindow {
-    private static let size: CGFloat = 28, expandedWidth: CGFloat = 138, margin: CGFloat = 6, wideFieldFactor: CGFloat = 10, dockOffset: CGFloat = 6
+    private static let size: CGFloat = 28, expandedWidth: CGFloat = 138, margin: CGFloat = 6, wideFieldFactor: CGFloat = 10, dockOffset: CGFloat = 6, edgeSearch = 14
     // Time-based easing (not a fixed step per tick) so the pill glides at the display's frame rate.
     private static let expandDuration: TimeInterval = 0.23, collapseDuration: TimeInterval = 0.17
 
@@ -400,6 +346,8 @@ final class OverlayWindow {
 
     // Origin of the round button (Cocoa coordinates); the pill grows to the left of it.
     private var anchor = NSPoint.zero
+    /// Where the overlay currently is, in AX coordinates (top-left origin); null until first shown. Edge detection skips it.
+    private var overlayArea = CGRect.null
     private var expansion: CGFloat = 0
     private var hovered = false
     private var userMoved = false   // the user dragged the button; keep it there until focus moves to another field
@@ -448,9 +396,18 @@ final class OverlayWindow {
         }
         anchor = NSPoint(x: x, y: y)
         applyLayout()
+        updateOverlayArea()
+    }
+
+    /// The window is always its full width in AX terms, as on Windows: the pill grows inside it.
+    private func updateOverlayArea() {
+        guard let primary = NSScreen.screens.first else { return }
+        let s = Self.size, w = Self.expandedWidth
+        overlayArea = CGRect(x: anchor.x - (w - s), y: primary.frame.height - (anchor.y + s), width: w, height: s)
     }
 
     func hide() {
+        overlayArea = .null
         userMoved = false // focus lost: the next field starts from its default placement
         animation?.invalidate()
         animation = nil
@@ -484,12 +441,18 @@ final class OverlayWindow {
             // Design 2, narrower field: the button would cover its text, so dock it to the bottom edge like a
             // tab (to the top edge when there is no room under it), with the corners that touch the field
             // squared off on both the green button and the pill.
-            // The field's visible border sits a little outside the focused element's bounds (padding).
-            y = primary.frame.height - (axFrame.maxY + Self.dockOffset + s)
+            // The focused element is usually the inner input; the field's visible border is a little further out.
+            // Look at the screen pixels just past the element to find it, and put the top of the pill on that border
+            // (falling back to a fixed offset when nothing can be measured).
             dock = .belowField
+            let edge = FieldEdge.find(axFrame, below: true, maxExtra: Self.edgeSearch, avoid: overlayArea)
+                ?? Int(axFrame.maxY + Self.dockOffset)
+            y = primary.frame.height - (CGFloat(edge) + s)
             let screenBottom = NSScreen.screens.first(where: { $0.frame.contains(NSPoint(x: x, y: y + s)) })?.visibleFrame.minY ?? 0
             if y < screenBottom {
-                y = primary.frame.height - (axFrame.minY - Self.dockOffset)
+                let topEdge = FieldEdge.find(axFrame, below: false, maxExtra: Self.edgeSearch, avoid: overlayArea)
+                    ?? Int(axFrame.minY - Self.dockOffset)
+                y = primary.frame.height - CGFloat(topEdge + 1)
                 dock = .aboveField
             }
         }
@@ -503,7 +466,9 @@ final class OverlayWindow {
         }
         anchor = NSPoint(x: x, y: y)
         applyLayout()
+        updateOverlayArea()
         panel.orderFrontRegardless()
+        DebugLog.write("overlay placed at \(Int(x)),\(Int(y)) size \(Int(s)) design=\(dock == .floating ? 1 : 2)")
     }
 
     private func applyLayout() {

@@ -14,7 +14,7 @@ final class ParaphraseController {
     init(settings: Settings) {
         self.settings = settings
         overlay.onAction = { [weak self] action in
-            guard let self, self.request == nil else { return }
+            guard let self, self.request == nil, self.current != nil, !self.overlay.isBusy else { return }
             self.request = Task { await self.run(action) }
         }
         overlay.onSettings = { [weak self] in self?.onOpenSettings?() }
@@ -49,18 +49,21 @@ final class ParaphraseController {
     }
 
     private func run(_ action: TextAction) async {
+        DebugLog.write("\(action) clicked (target=\(current == nil ? "none" : "set"), busy=\(overlay.isBusy))")
+        // Declared first so every exit, including the guard below, frees the controller for the next click.
+        defer { request = nil }
         guard let target = current, !overlay.isBusy else { return }
         overlay.setBusy(true)
         writing = false
+        let targetApp = NSWorkspace.shared.frontmostApplication
         defer {
-            request = nil
             writing = false
             overlay.setBusy(false)
         }
 
         do {
             let field = await TextAccess.read(target.element)
-            DebugLog.write("read \(field.text.count) chars (selection=\(field.isSelection))")
+            DebugLog.write("read \(field.text.count) chars from field")
             guard !field.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 Notifier.show("Nothing to \(action.verb.lowercased())", "The text field is empty.")
                 return
@@ -68,10 +71,17 @@ final class ParaphraseController {
 
             let result = try await ParaphraseClient.run(field.text, settings: settings, action: action)
 
-            guard FocusTracker.stillFocused(target.element) else {
-                TextAccess.setPasteboard(result)
-                Notifier.show("Focus changed", "The \(action.verb.lowercased())d text was copied to the clipboard instead.")
-                return
+            let (focused, front) = await FocusTracker.focusState(of: target.element)
+            if !focused || !front {
+                DebugLog.write("target lost focus (focused=\(focused), foreground=\(front)); bringing it back")
+                if await FocusTracker.restoreFocus(target.element, app: targetApp) {
+                    DebugLog.write("focus restored")
+                } else {
+                    DebugLog.write("could not restore focus; result left on the clipboard")
+                    TextAccess.setPasteboard(result)
+                    Notifier.show("Focus changed", "The \(action.verb.lowercased())d text was copied to the clipboard instead.")
+                    return
+                }
             }
             writing = true
             try await TextAccess.replace(field, in: target.element, with: result)
