@@ -48,6 +48,11 @@ private final class OverlayView: NSView {
     private var spinAngle: CGFloat = 90
     private var spinTimer: Timer?
     var expansion: CGFloat = 0 { didSet { needsDisplay = true } }
+    /// Which edge of the field the pill is docked to; the corners touching the field are squared off.
+    enum Dock { case floating, belowField, aboveField }
+    /// Outer corner radius when docked: a slightly softened edge rather than a pill.
+    static let dockedRadius: CGFloat = 5
+    var dock = Dock.floating { didSet { needsDisplay = true } }
     /// The actions fade in a beat after the pill starts opening (and out first when closing).
     private var actionAlpha: CGFloat { min(1, max(0, (expansion - 0.3) / 0.7)) }
 
@@ -109,7 +114,9 @@ private final class OverlayView: NSView {
     /// Grows a hovered button and shrinks a pressed one, around `center`.
     private func drawScaled(_ region: Region, around center: NSPoint, _ body: () -> Void) {
         let hover = hoverAmount[region] ?? 0, press = pressAmount[region] ?? 0
-        let scale = (1 + (region == .circle ? 0.08 : 0.14) * hover) * (1 - 0.12 * press)
+        // Docked to a field, the green button doesn't zoom.
+        let still = region == .circle && dock != .floating
+        let scale = still ? 1 : (1 + (region == .circle ? 0.08 : 0.14) * hover) * (1 - 0.12 * press)
         NSGraphicsContext.saveGraphicsState()
         let transform = NSAffineTransform()
         transform.translateX(by: center.x, yBy: center.y)
@@ -173,7 +180,9 @@ private final class OverlayView: NSView {
         let h = bounds.height
 
         if expansion > 0.01 {
-            let pill = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: h / 2, yRadius: h / 2)
+            let r = dock == .floating ? h / 2 : Self.dockedRadius
+            let pill = Self.roundedPath(bounds.insetBy(dx: 0.5, dy: 0.5),
+                                        top: dock == .belowField ? 0 : r, bottom: dock == .aboveField ? 0 : r)
             NSColor.white.withAlphaComponent(expansion).setFill()
             pill.fill()
             NSColor.black.withAlphaComponent(0.15 * expansion).setStroke()
@@ -187,7 +196,10 @@ private final class OverlayView: NSView {
             // A soft green highlight fades in behind the hovered action.
             for (region, rect) in [(Region.paraphrase, paraphrase), (Region.translate, translate)] {
                 Palette.green.withAlphaComponent(0.18 * (hoverAmount[region] ?? 0) * actionAlpha).setFill()
-                NSBezierPath(roundedRect: rect.insetBy(dx: 2, dy: 2), xRadius: 11, yRadius: 11).fill()
+                // Same corner setting as the pill: square on the side docked to the field, soft on the other.
+                let r = dock == .floating ? 11 : Self.dockedRadius
+                Self.roundedPath(rect.insetBy(dx: 2, dy: 2),
+                                 top: dock == .belowField ? 0 : r, bottom: dock == .aboveField ? 0 : r).fill()
             }
 
             drawScaled(.paraphrase, around: NSPoint(x: paraphrase.midX, y: paraphrase.midY)) {
@@ -206,6 +218,7 @@ private final class OverlayView: NSView {
             }
         }
 
+        // The green button starts 1 point below the pill's top and is 2 points shorter than the pill.
         let circle = NSRect(x: bounds.width - h, y: 0, width: h, height: h).insetBy(dx: 1, dy: 1)
         drawScaled(.circle, around: NSPoint(x: circle.midX, y: circle.midY)) { drawCircleButton(circle) }
     }
@@ -213,7 +226,8 @@ private final class OverlayView: NSView {
     private func drawCircleButton(_ circle: NSRect) {
         let cancel = busy ? hoverAmount[.circle] ?? 0 : 0
         (Palette.green.blended(withFraction: cancel, of: Palette.red) ?? Palette.green).setFill()
-        NSBezierPath(ovalIn: circle).fill()
+        let radius = dock == .floating ? min(circle.width, circle.height) / 2 : Self.dockedRadius
+        Self.roundedPath(circle, top: dock == .belowField ? 0 : radius, bottom: dock == .aboveField ? 0 : radius).fill()
 
         if busy {
             let spinner = circle.insetBy(dx: 6, dy: 6)
@@ -256,6 +270,22 @@ private final class OverlayView: NSView {
                 self.needsDisplay = true
             }
         }
+    }
+
+    /// Rounded rect whose top corners share one radius and bottom corners another (Cocoa: y grows upward).
+    private static func roundedPath(_ rect: NSRect, top: CGFloat, bottom: CGFloat) -> NSBezierPath {
+        let p = NSBezierPath()
+        p.move(to: NSPoint(x: rect.minX + top, y: rect.maxY))
+        p.line(to: NSPoint(x: rect.maxX - top, y: rect.maxY))
+        if top > 0 { p.appendArc(from: NSPoint(x: rect.maxX, y: rect.maxY), to: NSPoint(x: rect.maxX, y: rect.maxY - top), radius: top) }
+        p.line(to: NSPoint(x: rect.maxX, y: rect.minY + bottom))
+        if bottom > 0 { p.appendArc(from: NSPoint(x: rect.maxX, y: rect.minY), to: NSPoint(x: rect.maxX - bottom, y: rect.minY), radius: bottom) }
+        p.line(to: NSPoint(x: rect.minX + bottom, y: rect.minY))
+        if bottom > 0 { p.appendArc(from: NSPoint(x: rect.minX, y: rect.minY), to: NSPoint(x: rect.minX, y: rect.minY + bottom), radius: bottom) }
+        p.line(to: NSPoint(x: rect.minX, y: rect.maxY - top))
+        if top > 0 { p.appendArc(from: NSPoint(x: rect.minX, y: rect.maxY), to: NSPoint(x: rect.minX + top, y: rect.maxY), radius: top) }
+        p.close()
+        return p
     }
 
     /// Four-point sparkle.
@@ -304,7 +334,7 @@ extension OverlayView: NSViewToolTipOwner {
 
 @MainActor
 final class OverlayWindow {
-    private static let size: CGFloat = 28, expandedWidth: CGFloat = 102, margin: CGFloat = 6
+    private static let size: CGFloat = 28, expandedWidth: CGFloat = 102, margin: CGFloat = 6, wideFieldFactor: CGFloat = 10, dockOffset: CGFloat = 6
     // Time-based easing (not a fixed step per tick) so the pill glides at the display's frame rate.
     private static let expandDuration: TimeInterval = 0.23, collapseDuration: TimeInterval = 0.17
 
@@ -357,18 +387,36 @@ final class OverlayWindow {
         panel.orderOut(nil)
     }
 
-    /// Places the button at the right edge of `axFrame` (centred if the field is short, else bottom) (global coordinates, top-left origin).
+    /// Places the button at the right edge of `axFrame` (global coordinates, top-left origin): floating inside wide fields,
+    /// docked below (or above) narrower ones.
     func show(at axFrame: CGRect) {
         guard let primary = NSScreen.screens.first else { return }
         let s = Self.size
-        // Narrow fields (up to 5x the button) would be covered by the expanded pill: show nothing.
-        if axFrame.width <= s * 5 { hide(); return }
         // AX y grows downward from the primary screen's top edge; Cocoa y grows upward from its bottom edge.
         var x = axFrame.maxX - s - Self.margin
-        // Short fields (up to 3x the button) get the button centred; taller ones keep it bottom-right.
-        var y = axFrame.height <= s * 3
-            ? primary.frame.height - axFrame.midY - s / 2
-            : primary.frame.height - (axFrame.maxY - Self.margin)
+        var y: CGFloat
+        var dock = OverlayView.Dock.floating
+
+        if axFrame.width >= s * Self.wideFieldFactor {
+            // Design 1, wide field: a free-floating pill inside it, centred on short fields and at the
+            // bottom-right of taller ones.
+            y = axFrame.height <= s * 3
+                ? primary.frame.height - axFrame.midY - s / 2
+                : primary.frame.height - (axFrame.maxY - Self.margin)
+        } else {
+            // Design 2, narrower field: the button would cover its text, so dock it to the bottom edge like a
+            // tab (to the top edge when there is no room under it), with the corners that touch the field
+            // squared off on both the green button and the pill.
+            // The field's visible border sits a little outside the focused element's bounds (padding).
+            y = primary.frame.height - (axFrame.maxY + Self.dockOffset + s)
+            dock = .belowField
+            let screenBottom = NSScreen.screens.first(where: { $0.frame.contains(NSPoint(x: x, y: y + s)) })?.visibleFrame.minY ?? 0
+            if y < screenBottom {
+                y = primary.frame.height - (axFrame.minY - Self.dockOffset)
+                dock = .aboveField
+            }
+        }
+        view.dock = dock
 
         let probe = NSRect(x: x, y: y, width: s, height: s)
         if let screen = NSScreen.screens.first(where: { $0.frame.intersects(probe) }) {

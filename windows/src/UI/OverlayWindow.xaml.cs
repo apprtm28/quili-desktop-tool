@@ -17,7 +17,9 @@ namespace ParaphraseTool.UI
     /// </summary>
     public partial class OverlayWindow : Window
     {
-        const double CollapsedDip = 28, ExpandedDip = 102, MarginDip = 6;
+        const double CollapsedDip = 28, ExpandedDip = 102, MarginDip = 6, PillRadiusDip = 14, ChipRadiusDip = 13, ChipDip = 26,
+                      DockedCornerDip = 5, DockOffsetDip = 6, EdgeSearchDip = 14;   // design 2: outer corner radius, and drop to reach the field border
+        const int WideFieldFactor = 10;   // field width, in button widths, from which the floating design is used
         // Time-based easing (not a fixed step per tick) so the pill glides at the display's frame rate.
         const double ExpandMs = 230, CollapseMs = 170;
 
@@ -28,6 +30,8 @@ namespace ParaphraseTool.UI
         int _x, _y, _size;
         double _expansion;      // 0 = collapsed, 1 = fully expanded
         bool _hovered;
+        System.Drawing.Rectangle OverlayArea;   // where the overlay window currently is (empty until first shown)
+        bool _docked;           // design 2: docked to the field, the green button has no zoom effect
         bool _animating;
         double _from, _target, _durationMs;
         long _startMs;
@@ -46,7 +50,7 @@ namespace ParaphraseTool.UI
             // Hover / press feedback so the buttons read as clickable.
             MakeInteractive(ParaphraseAction, tint: true, hoverScale: 1.1);
             MakeInteractive(TranslateAction, tint: true, hoverScale: 1.1);
-            MakeInteractive(Chip, tint: false, hoverScale: 1.08);
+            MakeInteractive(Chip, tint: false, hoverScale: 1.08, noZoom: () => _docked);
 
             Chip.Background = _chipBrush;
             Chip.MouseEnter += (_, _) => UpdateCancelHover();
@@ -77,8 +81,10 @@ namespace ParaphraseTool.UI
         /// Grows the button slightly (and, for the pill actions, fades in a soft green highlight) while the
         /// mouse is over it, and shrinks it a little while it is pressed. Idle while a request is running.
         /// </summary>
-        void MakeInteractive(Border button, bool tint, double hoverScale)
+        void MakeInteractive(Border button, bool tint, double hoverScale, Func<bool>? noZoom = null)
         {
+            double Hover() => noZoom?.Invoke() == true ? 1 : hoverScale;
+            double Press() => noZoom?.Invoke() == true ? 1 : 0.88;
             var scale = new ScaleTransform(1, 1);
             button.RenderTransform = scale;
             button.RenderTransformOrigin = new Point(0.5, 0.5);
@@ -105,10 +111,10 @@ namespace ParaphraseTool.UI
                 highlight?.BeginAnimation(SolidColorBrush.ColorProperty,
                     new ColorAnimation(to, TimeSpan.FromMilliseconds(120)));
 
-            button.MouseEnter += (_, _) => { if (!IsBusy) { Scale(hoverScale, 130); Tint(TintOn); } };
+            button.MouseEnter += (_, _) => { if (!IsBusy) { Scale(Hover(), 130); Tint(TintOn); } };
             button.MouseLeave += (_, _) => { Scale(1, 130); Tint(TintOff); };
-            button.MouseLeftButtonDown += (_, _) => { if (!IsBusy) Scale(0.88, 70); };
-            button.MouseLeftButtonUp += (_, _) => Scale(button.IsMouseOver && !IsBusy ? hoverScale : 1, 110);
+            button.MouseLeftButtonDown += (_, _) => { if (!IsBusy) Scale(Press(), 70); };
+            button.MouseLeftButtonUp += (_, _) => Scale(button.IsMouseOver && !IsBusy ? Hover() : 1, 110);
         }
 
         public void SetBusy(bool busy)
@@ -130,17 +136,55 @@ namespace ParaphraseTool.UI
             _size = (int)Math.Round(CollapsedDip * scale);
             int margin = (int)Math.Round(MarginDip * scale);
 
-            // Narrow fields (up to 5x the button) would be covered by the expanded pill: show nothing.
-            if (bounds.Width <= _size * 5) { HideOverlay(); return; }
-
-            int x = (int)bounds.Right - _size - margin;
-            // Short fields (up to 3x the button) get the button centred; taller ones keep it bottom-right.
-            int y = bounds.Height <= _size * 3
-                ? (int)(bounds.Y + (bounds.Height - _size) / 2)
-                : (int)bounds.Bottom - _size - margin;
-
             var screen = System.Windows.Forms.Screen.FromRectangle(new System.Drawing.Rectangle(
                 (int)bounds.X, (int)bounds.Y, (int)bounds.Width, (int)bounds.Height)).WorkingArea;
+
+            int x = (int)bounds.Right - _size - margin;
+            int y;
+            var pillCorners = new CornerRadius(PillRadiusDip);
+            var chipCorners = new CornerRadius(ChipRadiusDip);
+            _docked = bounds.Width < _size * WideFieldFactor;
+
+            if (bounds.Width >= _size * WideFieldFactor)
+            {
+                // Design 1, wide field: a free-floating pill inside it, centred on short fields and at the
+                // bottom-right of taller ones.
+                y = bounds.Height <= _size * 3
+                    ? (int)(bounds.Y + (bounds.Height - _size) / 2)
+                    : (int)bounds.Bottom - _size - margin;
+            }
+            else
+            {
+                // Design 2, narrower field: the button would cover its text, so dock it to the bottom edge like
+                // a tab (to the top edge when there is no room under it), with the corners that touch the field
+                // squared off on both the green button and the pill. The button keeps its 1-unit inset, so it
+                // fills the pill's inside from top to bottom.
+                // The focused element is usually the inner input; the field's visible border is a little further
+                // out. Look at the screen pixels just past the element to find it, and put the top of the pill on
+                // that border (falling back to a fixed offset when nothing can be measured).
+                int offset = (int)Math.Round(DockOffsetDip * scale);
+                int reach = (int)Math.Round(EdgeSearchDip * scale);
+                y = FieldEdge.Find(bounds, below: true, reach, OverlayArea) ?? (int)bounds.Bottom + offset;
+                pillCorners = new CornerRadius(0, 0, DockedCornerDip, DockedCornerDip);
+                chipCorners = new CornerRadius(0, 0, DockedCornerDip, DockedCornerDip);
+                if (y + _size > screen.Bottom)
+                {
+                    int topEdge = FieldEdge.Find(bounds, below: false, reach, OverlayArea) ?? (int)bounds.Y - offset;
+                    y = topEdge + 1 - _size;
+                    pillCorners = new CornerRadius(DockedCornerDip, DockedCornerDip, 0, 0);
+                    chipCorners = new CornerRadius(DockedCornerDip, DockedCornerDip, 0, 0);
+                }
+            }
+            Pill.CornerRadius = pillCorners;
+            Chip.CornerRadius = chipCorners;
+            // Docked, the green button starts 1 unit below the pill's top and is 2 units shorter than the pill
+            // (so it ends 1 unit above the bottom); floating, it is centred with a 1-unit inset.
+            Chip.Height = _docked ? CollapsedDip - 2 : ChipDip;
+            Chip.VerticalAlignment = _docked ? VerticalAlignment.Top : VerticalAlignment.Center;
+            Chip.Margin = _docked ? new Thickness(1, 1, 1, 0) : new Thickness(1);
+            // The hover highlight behind each action follows the same corner setting as the button and pill.
+            ParaphraseAction.CornerRadius = chipCorners;
+            TranslateAction.CornerRadius = chipCorners;
             _x = Math.Max(screen.Left, Math.Min(x, screen.Right - _size));
             _y = Math.Max(screen.Top, Math.Min(y, screen.Bottom - _size));
 
@@ -152,6 +196,7 @@ namespace ParaphraseTool.UI
             int expandedPx = (int)Math.Round(ExpandedDip * scale);
             Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, _x - (expandedPx - _size), _y, expandedPx, _size,
                 Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
+            OverlayArea = new System.Drawing.Rectangle(_x - (expandedPx - _size), _y, expandedPx, _size);
 
             ApplyLayout();
             DebugLog.Write($"overlay placed at {_x},{_y} size {_size} visible={IsVisible}");
@@ -160,6 +205,7 @@ namespace ParaphraseTool.UI
         public void HideOverlay()
         {
             StopAnimation();
+            OverlayArea = System.Drawing.Rectangle.Empty;
             _hovered = false;
             _expansion = 0;
             _target = 0;
