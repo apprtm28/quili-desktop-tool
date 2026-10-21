@@ -93,10 +93,10 @@ namespace ParaphraseTool.Platform
         }
 
         /// <summary>Pastes over the original selection, or over the whole field when nothing was selected.</summary>
-        public static async Task ReplaceAsync(FieldText field, string text)
+        public static async Task ReplaceAsync(FieldText field, string text, AutomationElement el)
         {
             // The user may have moved the selection while the request ran; put it back or give up.
-            if (field.IsSelection && !await RestoreSelectionAsync(field))
+            if (field.IsSelection && !await RestoreSelectionAsync(field, el))
             {
                 TrySetClipboard(text);
                 throw new InvalidOperationException(
@@ -106,27 +106,50 @@ namespace ParaphraseTool.Platform
             var backup = GetClipboardText();
             if (!TrySetClipboard(text))
                 throw new InvalidOperationException("Could not access the clipboard.");
+            DebugLog.Write($"pasting (selectionOnly={field.IsSelection})");
             if (!field.IsSelection) Native.CtrlKey('A');
             Native.CtrlKey('V');
-            await Task.Delay(300); // let the target app read the clipboard before restoring it
+            await Task.Delay(400); // let the target app read the clipboard before restoring it
+
+            // Confirm the paste landed; if not, leave the result on the clipboard so it isn't lost.
+            var after = await Task.Run(() => TryReadUia(el).Whole);
+            if (!string.IsNullOrEmpty(after) && !Key(after).Contains(Key(text, 15)))
+            {
+                DebugLog.Write("paste did not land (field text unchanged)");
+                throw new InvalidOperationException(
+                    "The text could not be replaced in this field. The result was copied to the clipboard; paste it with Ctrl+V.");
+            }
+            DebugLog.Write("paste verified");
             if (backup != null) TrySetClipboard(backup);
         }
 
-        static async Task<bool> RestoreSelectionAsync(FieldText field)
+        static async Task<bool> RestoreSelectionAsync(FieldText field, AutomationElement el)
         {
             if (field.Range != null)
             {
                 try
                 {
                     await Task.Run(() => field.Range.Select());
-                    return true;
+                    var now = await Task.Run(() => TryReadUia(el).Selection);
+                    if (!string.IsNullOrEmpty(now) && Key(now, 30) == Key(field.Text, 30))
+                    {
+                        DebugLog.Write("selection restored via UIA range");
+                        return true;
+                    }
+                    DebugLog.Write("UIA range select did not reproduce the selection; comparing via clipboard");
                 }
-                catch (Exception) { /* range went stale; fall through to the text comparison */ }
+                catch (Exception ex) { DebugLog.Write($"range select failed: {ex.GetType().Name}"); }
             }
             // No usable range: only proceed if the current selection is still the same text.
-            var now = await CopyAsync();
-            return Normalize(now) == Normalize(field.Text);
+            var copied = await CopyAsync();
+            var same = Normalize(copied) == Normalize(field.Text);
+            DebugLog.Write($"selection still the same via clipboard: {same}");
+            return same;
         }
+
+        /// <summary>Letters/digits only, so emoji placeholders and whitespace differences don't matter when comparing.</summary>
+        static string Key(string s, int max = int.MaxValue) =>
+            new string(s.Where(char.IsLetterOrDigit).Take(max).ToArray()).ToLowerInvariant();
 
         static string Normalize(string s) => s.Replace("\r\n", "\n").Trim();
 

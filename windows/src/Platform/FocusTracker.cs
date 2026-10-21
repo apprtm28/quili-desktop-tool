@@ -72,6 +72,59 @@ namespace ParaphraseTool.Platform
             catch (Exception) { return false; }
         }
 
+        /// <summary>Process that owns the foreground window, as UI Automation reports it (null if unknown).</summary>
+        static int? ForegroundPid()
+        {
+            try
+            {
+                var hwnd = Native.GetForegroundWindow();
+                return hwnd == IntPtr.Zero ? null : AutomationElement.FromHandle(hwnd).Current.ProcessId;
+            }
+            catch (Exception) { return null; }
+        }
+
+        /// <summary>
+        /// Key presses (Ctrl+A/C/V) go to the foreground window, so only act when it belongs to the element's process.
+        /// Chromium apps keep a "focused element" per window, so UIA can report a field in a background window.
+        /// </summary>
+        public static bool IsForeground(AutomationElement element)
+        {
+            try
+            {
+                var fg = ForegroundPid();
+                return fg == null || fg == element.Current.ProcessId;
+            }
+            catch (Exception) { return false; }
+        }
+
+        /// <summary>
+        /// Brings the window and field back to the front after the user switched away during the request.
+        /// Windows only lets the foreground thread hand off focus, hence the AttachThreadInput dance.
+        /// </summary>
+        public static async System.Threading.Tasks.Task<bool> RestoreFocusAsync(AutomationElement element, IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return false;
+            try
+            {
+                if (Native.IsIconic(hwnd)) Native.ShowWindow(hwnd, Native.SW_RESTORE);
+                var current = Native.GetCurrentThreadId();
+                var fgThread = Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out _);
+                Native.AttachThreadInput(current, fgThread, true);
+                Native.SetForegroundWindow(hwnd);
+                Native.AttachThreadInput(current, fgThread, false);
+
+                await System.Threading.Tasks.Task.Delay(200);
+                await System.Threading.Tasks.Task.Run(() => { try { element.SetFocus(); } catch (Exception) { } });
+                await System.Threading.Tasks.Task.Delay(200);
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Write($"restore focus failed: {ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
+            return IsForeground(element) && StillFocused(element);
+        }
+
         void Report(string reason)
         {
             if (reason == _lastReason) return;
@@ -89,6 +142,8 @@ namespace ParaphraseTool.Platform
                 var info = el.Current;
                 var desc = $"{info.ControlType.ProgrammaticName} class='{info.ClassName}' pid={info.ProcessId}";
                 if (info.ProcessId == _ownPid) { Report($"skip own window: {desc}"); return null; }
+                var fg = ForegroundPid();
+                if (fg != null && fg != info.ProcessId) { Report($"skip background window (foreground pid={fg}): {desc}"); return null; }
                 if (info.IsOffscreen || info.IsPassword) { Report($"skip offscreen/password: {desc}"); return null; }
                 if (!IsEditable(el, info.ControlType)) { Report($"skip not editable: {desc}"); return null; }
 

@@ -61,6 +61,7 @@ namespace ParaphraseTool
             if (target == null || _overlay.IsBusy) return;
 
             _overlay.SetBusy(true);
+            var targetWindow = Native.GetForegroundWindow();
             try
             {
                 var field = await TextAccess.ReadAsync(target.Element);
@@ -73,14 +74,22 @@ namespace ParaphraseTool
 
                 var result = await ParaphraseClient.ParaphraseAsync(field.Text, _settings);
 
-                if (!FocusTracker.StillFocused(target.Element))
+                bool focused = FocusTracker.StillFocused(target.Element), front = FocusTracker.IsForeground(target.Element);
+                if (!focused || !front)
                 {
-                    TextAccess.TrySetClipboard(result);
-                    _notify("Focus changed", "Paraphrased text was copied to the clipboard instead.", NoticeLevel.Info);
-                    return;
+                    DebugLog.Write($"target lost focus (focused={focused}, foreground={front}); bringing it back");
+                    if (await FocusTracker.RestoreFocusAsync(target.Element, targetWindow))
+                        DebugLog.Write("focus restored");
+                    else
+                    {
+                        DebugLog.Write("could not restore focus; result left on the clipboard");
+                        TextAccess.TrySetClipboard(result);
+                        _notify("Focus changed", "Paraphrased text was copied to the clipboard instead.", NoticeLevel.Info);
+                        return;
+                    }
                 }
 
-                await TextAccess.ReplaceAsync(field, result);
+                await TextAccess.ReplaceAsync(field, result, target.Element);
                 DebugLog.Write("field replaced");
             }
             catch (Exception ex)
