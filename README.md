@@ -41,9 +41,9 @@ dotnet run
 ## Package for install
 ```powershell
 cd windows
-./publish.ps1        # produces windows\dist\ParaphraseTool.exe (self-contained, single file)
+./publish.ps1        # produces dist\windows\ParaphraseTool.exe (self-contained, single file)
 ```
-Then compile `windows\installer.iss` with [Inno Setup](https://jrsoftware.org/isinfo.php) to get `windows\dist\ParaphraseToolSetup.exe`.
+Then compile `windows\installer.iss` with [Inno Setup](https://jrsoftware.org/isinfo.php) to get `dist\windows\ParaphraseToolSetup-<version>.exe`.
 
 ## Releases
 Downloads are on the repo's **Releases** page: `ParaphraseTool-Setup-vX.Y.Z.exe` (Windows installer), `ParaphraseTool-vX.Y.Z-win-x64.exe` (portable) and `ParaphraseTool-vX.Y.Z-macos.zip` (universal app).
@@ -69,7 +69,7 @@ The builds aren't code-signed, so first launch shows a warning: on Windows choos
 ## macOS version (`mac/`)
 A native Swift menu-bar app with the same behavior (✦ button on the focused field, selection-only or whole-field paraphrase, same `/api/paraphrase` server). The Windows code above is WPF/UI Automation and can't run on macOS, so the Mac app is a separate implementation.
 
-- **Build (on a Mac with Xcode or the Command Line Tools):** `cd mac && ./build.sh` → `mac/dist/ParaphraseTool.app` (universal arm64 + x86_64), then it launches. `./build.sh nolaunch` only builds.
+- **Build (on a Mac with Xcode or the Command Line Tools):** `cd mac && ./build.sh` → `dist/mac/ParaphraseTool.app` (universal arm64 + x86_64), then it launches. `./build.sh nolaunch` only builds.
 - **Permission:** on first launch grant **System Settings → Privacy & Security → Accessibility** to Paraphrase Tool. Without it, no fields are detected and paste is blocked.
 - **Detection:** the macOS Accessibility API (`AXUIElement`) instead of UI Automation; for Chromium/Electron apps it sets `AXEnhancedUserInterface`/`AXManualAccessibility` so Chrome and Slack expose their fields.
 - **Write:** pasteboard + Cmd+A / Cmd+V. The original selection is restored before pasting. Your previous text clipboard is restored.

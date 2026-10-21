@@ -5,8 +5,8 @@
 #
 #   (no args)     build every platform this machine can: Windows always (needs the .NET 8 SDK),
 #                 macOS only when run on a Mac (needs Xcode / Command Line Tools)
-#   windows       Release publish -> windows/dist/ParaphraseTool.exe
-#   mac           Release build   -> mac/dist/ParaphraseTool.app
+#   windows       Release publish -> dist/windows/ParaphraseTool.exe
+#   mac           Release build   -> dist/mac/ParaphraseTool.app
 #   debug         compile-check only: no packaging, nothing is killed or launched
 #   nolaunch      don't start the freshly built app
 #

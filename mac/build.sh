@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds a universal (arm64 + x86_64) ParaphraseTool.app on macOS. Needs Xcode or the Command Line Tools.
-#   ./build.sh          # build dist/ParaphraseTool.app and launch it
+#   ./build.sh          # build ../dist/mac/ParaphraseTool.app and launch it
 #   ./build.sh nolaunch # build only
 #   ./build.sh debug    # compile check only
 set -euo pipefail
@@ -22,8 +22,9 @@ pkill -x ParaphraseTool 2>/dev/null && echo "Stopped running ParaphraseTool." ||
 swift build -c release --arch arm64 --arch x86_64
 BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/ParaphraseTool"
 
-APP="dist/ParaphraseTool.app"
-rm -rf dist
+OUT="../dist/mac"
+APP="$OUT/ParaphraseTool.app"
+rm -rf "$OUT"
 mkdir -p "$APP/Contents/MacOS"
 cp "$BIN" "$APP/Contents/MacOS/ParaphraseTool"
 cp Info.plist "$APP/Contents/Info.plist"
@@ -33,5 +34,5 @@ VERSION="$(tr -d '[:space:]' < ../VERSION)"
 # Ad-hoc signature so macOS keeps the Accessibility permission tied to this bundle.
 codesign --force --deep --sign - "$APP"
 
-echo "Done: $(pwd)/$APP (version $VERSION)"
+echo "Done: $(cd "$OUT" && pwd)/ParaphraseTool.app (version $VERSION)"
 if [[ "${1:-}" != "nolaunch" ]]; then open "$APP"; fi

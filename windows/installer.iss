@@ -8,14 +8,14 @@ AppName=Paraphrase Tool
 AppVersion={#AppVersion}
 DefaultDirName={autopf}\ParaphraseTool
 DefaultGroupName=Paraphrase Tool
-OutputDir=dist
+OutputDir=..\dist\windows
 OutputBaseFilename=ParaphraseToolSetup-{#AppVersion}
 PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64compatible
 Compression=lzma2
 
 [Files]
-Source: "dist\ParaphraseTool.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\windows\ParaphraseTool.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Paraphrase Tool"; Filename: "{app}\ParaphraseTool.exe"
