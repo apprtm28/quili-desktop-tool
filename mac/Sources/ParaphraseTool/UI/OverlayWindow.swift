@@ -20,19 +20,91 @@ private final class OverlayView: NSView {
     var busy = false {
         didSet {
             needsDisplay = true
-            if busy { startSpinning() } else { spinTimer?.invalidate(); spinTimer = nil }
+            if busy {
+                hovered = nil
+                pressed = nil
+                startSpinning()
+            } else {
+                spinTimer?.invalidate()
+                spinTimer = nil
+            }
         }
     }
+
+    // Hover / press feedback so the buttons read as clickable.
+    private enum Region: CaseIterable { case translate, paraphrase, circle }
+    private var hovered: Region? { didSet { if hovered != oldValue { startHoverAnimation(); updateCursor() } } }
+    private var pressed: Region? { didSet { if pressed != oldValue { startHoverAnimation() } } }
+    private var hoverAmount: [Region: CGFloat] = [:]   // 0…1, eased toward the target each frame
+    private var pressAmount: [Region: CGFloat] = [:]
+    private var hoverTimer: Timer?
     private var spinAngle: CGFloat = 90
     private var spinTimer: Timer?
     var expansion: CGFloat = 0 { didSet { needsDisplay = true } }
+    /// The actions fade in a beat after the pill starts opening (and out first when closing).
+    private var actionAlpha: CGFloat { min(1, max(0, (expansion - 0.3) / 0.7)) }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     // The round button ("Text Tool") and the Paraphrase action both paraphrase; EN translates to English.
+    override func mouseDown(with event: NSEvent) {
+        guard !busy else { return }
+        pressed = region(at: convert(event.locationInWindow, from: nil))
+    }
+
     override func mouseUp(with event: NSEvent) {
+        pressed = nil
         guard !busy else { return }
         onAction?(action(at: convert(event.locationInWindow, from: nil)))
+    }
+
+    private func region(at point: NSPoint) -> Region? {
+        if point.x >= bounds.width - bounds.height { return .circle }
+        guard expansion > 0.5 else { return nil }
+        if point.x >= paraphraseMinX { return .paraphrase }
+        if point.x >= paraphraseMinX - Self.actionWidth { return .translate }
+        return nil
+    }
+
+    private func updateCursor() { (hovered == nil ? NSCursor.arrow : NSCursor.pointingHand).set() }
+
+    private func startHoverAnimation() {
+        guard hoverTimer == nil else { return }
+        hoverTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.stepHover() }
+        }
+    }
+
+    private func stepHover() {
+        var settled = true
+        for region in Region.allCases {
+            if !approach(&hoverAmount[region, default: 0], to: hovered == region ? 1 : 0) { settled = false }
+            if !approach(&pressAmount[region, default: 0], to: pressed == region ? 1 : 0) { settled = false }
+        }
+        needsDisplay = true
+        if settled { hoverTimer?.invalidate(); hoverTimer = nil }
+    }
+
+    /// Moves `value` one step toward `target`; true once it has arrived.
+    private func approach(_ value: inout CGFloat, to target: CGFloat) -> Bool {
+        let step: CGFloat = 0.22
+        if abs(target - value) <= step { value = target; return true }
+        value += value < target ? step : -step
+        return false
+    }
+
+    /// Grows a hovered button and shrinks a pressed one, around `center`.
+    private func drawScaled(_ region: Region, around center: NSPoint, _ body: () -> Void) {
+        let hover = hoverAmount[region] ?? 0, press = pressAmount[region] ?? 0
+        let scale = (1 + (region == .circle ? 0.08 : 0.14) * hover) * (1 - 0.12 * press)
+        NSGraphicsContext.saveGraphicsState()
+        let transform = NSAffineTransform()
+        transform.translateX(by: center.x, yBy: center.y)
+        transform.scale(by: scale)
+        transform.translateX(by: -center.x, yBy: -center.y)
+        transform.concat()
+        body()
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private var paraphraseMinX: CGFloat { bounds.width - bounds.height - Self.actionWidth }
@@ -60,11 +132,22 @@ private final class OverlayView: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+        addTrackingArea(NSTrackingArea(rect: bounds,
+                                       options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
                                        owner: self, userInfo: nil))
     }
-    override func mouseEntered(with event: NSEvent) { onHover?(true) }
-    override func mouseExited(with event: NSEvent) { onHover?(false) }
+    override func mouseEntered(with event: NSEvent) {
+        onHover?(true)
+        mouseMoved(with: event)
+    }
+    override func mouseMoved(with event: NSEvent) {
+        hovered = busy ? nil : region(at: convert(event.locationInWindow, from: nil))
+    }
+    override func mouseExited(with event: NSEvent) {
+        hovered = nil
+        pressed = nil
+        onHover?(false)
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         let h = bounds.height
@@ -79,20 +162,35 @@ private final class OverlayView: NSView {
 
             // Actions are anchored to the round button, so they slide out with the pill.
             let paraphrase = NSRect(x: paraphraseMinX, y: 0, width: Self.actionWidth, height: h)
-            Palette.green.withAlphaComponent(expansion).setFill()
-            Self.star(center: NSPoint(x: paraphrase.midX - 1, y: paraphrase.midY - 1), radius: 7).fill()
-            Self.star(center: NSPoint(x: paraphrase.midX + 6, y: paraphrase.midY + 6), radius: 3).fill()
-
             let translate = paraphrase.offsetBy(dx: -Self.actionWidth, dy: 0)
-            let label = NSAttributedString(string: "EN", attributes: [
-                .font: NSFont.boldSystemFont(ofSize: 12),
-                .foregroundColor: Palette.green.withAlphaComponent(expansion),
-            ])
-            let size = label.size()
-            label.draw(at: NSPoint(x: translate.midX - size.width / 2, y: translate.midY - size.height / 2))
+
+            // A soft green highlight fades in behind the hovered action.
+            for (region, rect) in [(Region.paraphrase, paraphrase), (Region.translate, translate)] {
+                Palette.green.withAlphaComponent(0.18 * (hoverAmount[region] ?? 0) * actionAlpha).setFill()
+                NSBezierPath(roundedRect: rect.insetBy(dx: 2, dy: 2), xRadius: 11, yRadius: 11).fill()
+            }
+
+            drawScaled(.paraphrase, around: NSPoint(x: paraphrase.midX, y: paraphrase.midY)) {
+                Palette.green.withAlphaComponent(actionAlpha).setFill()
+                Self.star(center: NSPoint(x: paraphrase.midX - 1, y: paraphrase.midY - 1), radius: 7).fill()
+                Self.star(center: NSPoint(x: paraphrase.midX + 6, y: paraphrase.midY + 6), radius: 3).fill()
+            }
+
+            drawScaled(.translate, around: NSPoint(x: translate.midX, y: translate.midY)) {
+                let label = NSAttributedString(string: "EN", attributes: [
+                    .font: NSFont.boldSystemFont(ofSize: 12),
+                    .foregroundColor: Palette.green.withAlphaComponent(actionAlpha),
+                ])
+                let size = label.size()
+                label.draw(at: NSPoint(x: translate.midX - size.width / 2, y: translate.midY - size.height / 2))
+            }
         }
 
         let circle = NSRect(x: bounds.width - h, y: 0, width: h, height: h).insetBy(dx: 1, dy: 1)
+        drawScaled(.circle, around: NSPoint(x: circle.midX, y: circle.midY)) { drawCircleButton(circle) }
+    }
+
+    private func drawCircleButton(_ circle: NSRect) {
         Palette.green.setFill()
         NSBezierPath(ovalIn: circle).fill()
 
@@ -174,11 +272,14 @@ extension OverlayView: NSViewToolTipOwner {
 @MainActor
 final class OverlayWindow {
     private static let size: CGFloat = 28, expandedWidth: CGFloat = 102, margin: CGFloat = 6
-    private static let stepPerTick: CGFloat = 0.2
+    // Time-based easing (not a fixed step per tick) so the pill glides at the display's frame rate.
+    private static let expandDuration: TimeInterval = 0.23, collapseDuration: TimeInterval = 0.17
 
     private let panel: OverlayPanel
     private let view: OverlayView
     private var animation: Timer?
+    private var animFrom: CGFloat = 0, animTarget: CGFloat = 0
+    private var animStart = Date(), animDuration: TimeInterval = 0.2
 
     // Origin of the round button (Cocoa coordinates); the pill grows to the left of it.
     private var anchor = NSPoint.zero
@@ -215,6 +316,7 @@ final class OverlayWindow {
     func hide() {
         animation?.invalidate()
         animation = nil
+        animTarget = 0
         hovered = false
         expansion = 0
         view.expansion = 0
@@ -242,27 +344,38 @@ final class OverlayWindow {
 
     private func applyLayout() {
         let s = Self.size
-        let width = s + (Self.expandedWidth - s) * expansion
+        // Whole-pixel frame: a fractional width/origin makes the round button shimmer while the pill grows.
+        let width = (s + (Self.expandedWidth - s) * expansion).rounded()
         view.expansion = expansion
-        panel.setFrame(NSRect(x: anchor.x - (width - s), y: anchor.y, width: width, height: s), display: true)
+        panel.setFrame(NSRect(x: (anchor.x - (width - s)).rounded(), y: anchor.y.rounded(), width: width, height: s),
+                       display: true)
     }
 
+    /// Eases the pill toward open (hovered, idle) or closed, starting from where it is now.
     private func startAnimating() {
+        let target: CGFloat = hovered && !isBusy ? 1 : 0
+        if animation != nil ? target == animTarget : target == expansion { return }
+
+        animFrom = expansion
+        animTarget = target
+        animDuration = target > expansion ? Self.expandDuration : Self.collapseDuration
+        animStart = Date()
         guard animation == nil else { return }
-        animation = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+        RunLoop.main.add(timer, forMode: .common) // keep animating while the mouse is tracked
+        animation = timer
     }
 
     private func tick() {
-        let target: CGFloat = hovered && !isBusy ? 1 : 0
-        if abs(target - expansion) <= Self.stepPerTick {
-            expansion = target
+        let t = min(1, Date().timeIntervalSince(animStart) / animDuration)
+        let eased = 1 - pow(1 - CGFloat(t), 3) // ease-out cubic
+        expansion = animFrom + (animTarget - animFrom) * eased
+        applyLayout()
+        if t >= 1 {
             animation?.invalidate()
             animation = nil
-        } else {
-            expansion += expansion < target ? Self.stepPerTick : -Self.stepPerTick
         }
-        applyLayout()
     }
 }

@@ -7,10 +7,13 @@
     <!-- Collapsed: just the green round button on the right. Hovered: a white pill grows to the left
          with the action buttons (Translate to English, Paraphrase) in front of the round button. -->
     <Grid x:Name="Root" Background="Transparent" MouseEnter="Root_MouseEnter" MouseLeave="Root_MouseLeave">
+        <!-- The window stays full width at all times and only this host grows, so the round button never
+             moves while the pill opens (resizing the native window every frame made it shake). -->
+        <Grid x:Name="PillHost" HorizontalAlignment="Right" Width="28" ClipToBounds="True">
         <Border x:Name="Pill" Background="White" BorderBrush="#26000000" BorderThickness="1"
                 CornerRadius="14" Opacity="0" />
 
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,28,0">
             <Border x:Name="TranslateAction" Width="36" Height="26" Opacity="0" Background="Transparent"
                     Cursor="Hand" ToolTip="Translate to English" MouseLeftButtonUp="Translate_MouseLeftButtonUp">
                 <TextBlock Text="EN" Foreground="#3DBE4A" FontSize="12" FontWeight="Bold"
@@ -29,7 +32,10 @@
                 </Viewbox>
             </Border>
 
-            <Border x:Name="Chip" Width="26" Height="26" Margin="1" CornerRadius="13" Background="#3DBE4A"
+        </StackPanel>
+        </Grid>
+
+            <Border x:Name="Chip" HorizontalAlignment="Right" VerticalAlignment="Center" Width="26" Height="26" Margin="1" CornerRadius="13" Background="#3DBE4A"
                     Cursor="Hand" ToolTip="Text Tool" MouseLeftButtonUp="Chip_MouseLeftButtonUp">
                 <Grid>
                     <Viewbox x:Name="Robot" Width="16" Height="16">
@@ -57,6 +63,5 @@
                     </Grid>
                 </Grid>
             </Border>
-        </StackPanel>
     </Grid>
 </Window>
