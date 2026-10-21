@@ -6,6 +6,15 @@ struct ParaphraseError: LocalizedError {
 }
 
 enum ParaphraseClient {
+    // A dead connection fails fast and is retried once, so a server restart costs seconds, not a long hang.
+    private static let session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 45
+        config.timeoutIntervalForResource = 50
+        config.waitsForConnectivity = false
+        return URLSession(configuration: config)
+    }()
+
     /// Accepts either the base URL or the full endpoint URL and returns the base URL.
     static func normalize(_ url: String) -> String {
         var u = url.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -28,7 +37,7 @@ enum ParaphraseClient {
             throw ParaphraseError(message: "Server URL or API key not set. Open Settings from the menu bar icon.")
         }
 
-        var req = URLRequest(url: url, timeoutInterval: 120)
+        var req = URLRequest(url: url, timeoutInterval: 45)
         req.httpMethod = "POST"
         req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
@@ -39,7 +48,15 @@ enum ParaphraseClient {
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         DebugLog.write("\(action) request: POST \(url) (\(TextHygiene.describe(text)))")
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp): (Data, URLResponse)
+        do {
+            (data, resp) = try await session.data(for: req)
+        } catch let error as URLError where [.networkConnectionLost, .cannotConnectToHost, .notConnectedToInternet,
+                                              .dnsLookupFailed, .secureConnectionFailed].contains(error.code) {
+            // Connection-level failure (no HTTP response at all): safe to try once more.
+            DebugLog.write("\(action) connection failed (\(error.localizedDescription)); retrying once")
+            (data, resp) = try await session.data(for: req)
+        }
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         DebugLog.write("\(action) response: HTTP \(status)")
 

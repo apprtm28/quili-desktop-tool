@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Threading;
 using ParaphraseTool.Core;
@@ -21,6 +22,8 @@ namespace ParaphraseTool
         readonly OverlayWindow _overlay = new();
         readonly FocusTracker _tracker = new();
         TextTarget? _current;
+        CancellationTokenSource? _cts;
+        bool _writing; // once the field is being written, cancelling would leave it half-replaced
 
         public ParaphraseController(Settings settings, Dispatcher dispatcher, Action<string, string, NoticeLevel> notify)
         {
@@ -28,6 +31,12 @@ namespace ParaphraseTool
             _dispatcher = dispatcher;
             _notify = notify;
             _overlay.ActionRequested += action => _ = RunAsync(action);
+            _overlay.CancelRequested += () =>
+            {
+                if (_writing) return;
+                DebugLog.Write("cancel requested; dropping the connection");
+                _cts?.Cancel();
+            };
             _tracker.TargetChanged += t => _dispatcher.BeginInvoke(() => OnTargetChanged(t));
         }
 
@@ -61,6 +70,8 @@ namespace ParaphraseTool
             if (target == null || _overlay.IsBusy) return;
 
             _overlay.SetBusy(true);
+            using var cts = _cts = new CancellationTokenSource();
+            _writing = false;
             var targetWindow = Native.GetForegroundWindow();
             try
             {
@@ -72,7 +83,7 @@ namespace ParaphraseTool
                     return;
                 }
 
-                var result = await ParaphraseClient.RunAsync(field.Text, _settings, action);
+                var result = await ParaphraseClient.RunAsync(field.Text, _settings, action, cts.Token);
 
                 bool focused = FocusTracker.StillFocused(target.Element), front = FocusTracker.IsForeground(target.Element);
                 if (!focused || !front)
@@ -89,8 +100,13 @@ namespace ParaphraseTool
                     }
                 }
 
+                _writing = true;
                 await TextAccess.ReplaceAsync(field, result, target.Element);
                 DebugLog.Write("field replaced");
+            }
+            catch (OperationCanceledException) when (cts.IsCancellationRequested)
+            {
+                DebugLog.Write($"{action} cancelled by the user");
             }
             catch (Exception ex)
             {
@@ -99,6 +115,8 @@ namespace ParaphraseTool
             }
             finally
             {
+                _cts = null;
+                _writing = false;
                 _overlay.SetBusy(false);
             }
         }

@@ -61,6 +61,12 @@
                             </Ellipse.RenderTransform>
                         </Ellipse>
                     </Grid>
+                    <!-- Cancel mark: shown instead of the spinner while hovering the busy button. -->
+                    <Canvas x:Name="CancelMark" Width="12" Height="12" Visibility="Collapsed"
+                            HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Line X1="1.5" Y1="1.5" X2="10.5" Y2="10.5" Stroke="White" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                        <Line X1="10.5" Y1="1.5" X2="1.5" Y2="10.5" Stroke="White" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                    </Canvas>
                 </Grid>
             </Border>
     </Grid>

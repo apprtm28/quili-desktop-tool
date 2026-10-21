@@ -8,10 +8,20 @@ final class ParaphraseController {
     private let tracker = FocusTracker()
     private let overlay = OverlayWindow()
     private var current: TextTarget?
+    private var request: Task<Void, Never>?
+    private var writing = false // once the field is being written, cancelling would leave it half-replaced
 
     init(settings: Settings) {
         self.settings = settings
-        overlay.onAction = { [weak self] action in Task { await self?.run(action) } }
+        overlay.onAction = { [weak self] action in
+            guard let self, self.request == nil else { return }
+            self.request = Task { await self.run(action) }
+        }
+        overlay.onCancel = { [weak self] in
+            guard let self, !self.writing else { return }
+            DebugLog.write("cancel requested; dropping the connection")
+            self.request?.cancel()
+        }
         tracker.onChange = { [weak self] target in self?.targetChanged(target) }
     }
 
@@ -35,7 +45,12 @@ final class ParaphraseController {
     private func run(_ action: TextAction) async {
         guard let target = current, !overlay.isBusy else { return }
         overlay.setBusy(true)
-        defer { overlay.setBusy(false) }
+        writing = false
+        defer {
+            request = nil
+            writing = false
+            overlay.setBusy(false)
+        }
 
         do {
             let field = await TextAccess.read(target.element)
@@ -52,8 +67,13 @@ final class ParaphraseController {
                 Notifier.show("Focus changed", "The \(action.verb.lowercased())d text was copied to the clipboard instead.")
                 return
             }
+            writing = true
             try await TextAccess.replace(field, in: target.element, with: result)
             DebugLog.write("field replaced")
+        } catch is CancellationError {
+            DebugLog.write("\(action) cancelled by the user")
+        } catch let error as URLError where error.code == .cancelled {
+            DebugLog.write("\(action) cancelled by the user")
         } catch {
             DebugLog.write("\(action) failed: \(error.localizedDescription)")
             Notifier.show("\(action.verb) failed", error.localizedDescription)

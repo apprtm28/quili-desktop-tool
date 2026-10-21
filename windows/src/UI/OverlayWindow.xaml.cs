@@ -33,6 +33,7 @@ namespace ParaphraseTool.UI
         long _startMs;
 
         public event Action<TextAction>? ActionRequested;
+        public event Action? CancelRequested;
         public bool IsBusy { get; private set; }
 
         public OverlayWindow()
@@ -46,6 +47,27 @@ namespace ParaphraseTool.UI
             MakeInteractive(ParaphraseAction, tint: true, hoverScale: 1.1);
             MakeInteractive(TranslateAction, tint: true, hoverScale: 1.1);
             MakeInteractive(Chip, tint: false, hoverScale: 1.08);
+
+            Chip.Background = _chipBrush;
+            Chip.MouseEnter += (_, _) => UpdateCancelHover();
+            Chip.MouseLeave += (_, _) => { _cancelReady = true; UpdateCancelHover(); };
+        }
+
+        static readonly Color ChipGreen = Color.FromRgb(0x3D, 0xBE, 0x4A);
+        static readonly Color ChipRed = Color.FromRgb(0xE5, 0x48, 0x4D);
+        readonly SolidColorBrush _chipBrush = new(ChipGreen);
+        bool _cancelReady; // the click that started the request must not cancel it; the pointer has to leave first
+
+        /// <summary>While busy and hovered, the round button turns red with a cancel mark and "Cancel" tooltip.</summary>
+        void UpdateCancelHover()
+        {
+            bool cancel = IsBusy && _cancelReady && Chip.IsMouseOver;
+            _chipBrush.BeginAnimation(SolidColorBrush.ColorProperty,
+                new ColorAnimation(cancel ? ChipRed : ChipGreen, TimeSpan.FromMilliseconds(120)));
+            CancelMark.Visibility = cancel ? Visibility.Visible : Visibility.Collapsed;
+            Spinner.Visibility = IsBusy && !cancel ? Visibility.Visible : Visibility.Collapsed;
+            Chip.ToolTip = IsBusy ? (cancel ? "Cancel" : null) : "Text Tool";
+            Chip.Cursor = !IsBusy || cancel ? Cursors.Hand : Cursors.Wait;
         }
 
         static readonly Color TintOff = Color.FromArgb(0x00, 0x3D, 0xBE, 0x4A);
@@ -93,11 +115,11 @@ namespace ParaphraseTool.UI
         {
             IsBusy = busy;
             Robot.Visibility = busy ? Visibility.Collapsed : Visibility.Visible;
-            Spinner.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
             Spin.BeginAnimation(RotateTransform.AngleProperty, busy
                 ? new DoubleAnimation(0, 360, TimeSpan.FromSeconds(0.9)) { RepeatBehavior = RepeatBehavior.Forever }
                 : null);
-            Chip.Cursor = busy ? Cursors.Wait : Cursors.Hand;
+            _cancelReady = !Chip.IsMouseOver;
+            UpdateCancelHover();
             Retarget(); // collapse while busy, re-expand if still hovered afterwards
         }
 
@@ -109,7 +131,10 @@ namespace ParaphraseTool.UI
             int margin = (int)Math.Round(MarginDip * scale);
 
             int x = (int)bounds.Right - _size - margin;
-            int y = (int)bounds.Bottom - _size - margin;
+            // Short fields (up to 3x the button) get the button centred; taller ones keep it bottom-right.
+            int y = bounds.Height <= _size * 3
+                ? (int)(bounds.Y + (bounds.Height - _size) / 2)
+                : (int)bounds.Bottom - _size - margin;
 
             var screen = System.Windows.Forms.Screen.FromRectangle(new System.Drawing.Rectangle(
                 (int)bounds.X, (int)bounds.Y, (int)bounds.Width, (int)bounds.Height)).WorkingArea;
@@ -196,7 +221,15 @@ namespace ParaphraseTool.UI
         }
 
         // The round button ("Text Tool") and the Paraphrase action both paraphrase; EN translates to English.
-        void Chip_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => Trigger(TextAction.Paraphrase);
+        void Chip_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (IsBusy)
+            {
+                if (_cancelReady) CancelRequested?.Invoke();
+                return;
+            }
+            Trigger(TextAction.Paraphrase);
+        }
         void Action_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => Trigger(TextAction.Paraphrase);
         void Translate_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => Trigger(TextAction.TranslateToEnglish);
 

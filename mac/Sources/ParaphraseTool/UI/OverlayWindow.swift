@@ -8,6 +8,7 @@ private final class OverlayPanel: NSPanel {
 
 private enum Palette {
     static let green = NSColor(red: 0x3D / 255.0, green: 0xBE / 255.0, blue: 0x4A / 255.0, alpha: 1)
+    static let red = NSColor(red: 0xE5 / 255.0, green: 0x48 / 255.0, blue: 0x4D / 255.0, alpha: 1)
     static let dark = NSColor(red: 0x1F / 255.0, green: 0x2A / 255.0, blue: 0x24 / 255.0, alpha: 1)
 }
 
@@ -17,12 +18,18 @@ private final class OverlayView: NSView {
     static let actionWidth: CGFloat = 36
     var onAction: ((TextAction) -> Void)?
     var onHover: ((Bool) -> Void)?
+    var onCancel: (() -> Void)?
+    /// While busy, the round button turns into "Cancel" on hover. The click that started the request must
+    /// not cancel it, so the pointer has to leave the button first.
+    private var cancelReady = false
     var busy = false {
         didSet {
             needsDisplay = true
             if busy {
                 hovered = nil
                 pressed = nil
+                let mouse = window.map { convert($0.mouseLocationOutsideOfEventStream, from: nil) }
+                cancelReady = mouse.map { region(at: $0) != .circle } ?? true
                 startSpinning()
             } else {
                 spinTimer?.invalidate()
@@ -48,13 +55,19 @@ private final class OverlayView: NSView {
 
     // The round button ("Text Tool") and the Paraphrase action both paraphrase; EN translates to English.
     override func mouseDown(with event: NSEvent) {
-        guard !busy else { return }
+        if busy {
+            if hovered == .circle { pressed = .circle }
+            return
+        }
         pressed = region(at: convert(event.locationInWindow, from: nil))
     }
 
     override func mouseUp(with event: NSEvent) {
         pressed = nil
-        guard !busy else { return }
+        if busy {
+            if hovered == .circle { onCancel?() }
+            return
+        }
         onAction?(action(at: convert(event.locationInWindow, from: nil)))
     }
 
@@ -141,9 +154,16 @@ private final class OverlayView: NSView {
         mouseMoved(with: event)
     }
     override func mouseMoved(with event: NSEvent) {
-        hovered = busy ? nil : region(at: convert(event.locationInWindow, from: nil))
+        let region = region(at: convert(event.locationInWindow, from: nil))
+        if busy {
+            if region != .circle { cancelReady = true }
+            hovered = cancelReady && region == .circle ? .circle : nil
+        } else {
+            hovered = region
+        }
     }
     override func mouseExited(with event: NSEvent) {
+        cancelReady = true
         hovered = nil
         pressed = nil
         onHover?(false)
@@ -191,7 +211,8 @@ private final class OverlayView: NSView {
     }
 
     private func drawCircleButton(_ circle: NSRect) {
-        Palette.green.setFill()
+        let cancel = busy ? hoverAmount[.circle] ?? 0 : 0
+        (Palette.green.blended(withFraction: cancel, of: Palette.red) ?? Palette.green).setFill()
         NSBezierPath(ovalIn: circle).fill()
 
         if busy {
@@ -201,15 +222,26 @@ private final class OverlayView: NSView {
 
             let track = NSBezierPath(ovalIn: spinner)
             track.lineWidth = 2
-            Palette.dark.withAlphaComponent(0.2).setStroke()
+            Palette.dark.withAlphaComponent(0.2 * (1 - cancel)).setStroke()
             track.stroke()
 
             let arc = NSBezierPath()
             arc.appendArc(withCenter: center, radius: radius, startAngle: spinAngle, endAngle: spinAngle + 100, clockwise: false)
             arc.lineWidth = 2
             arc.lineCapStyle = .round
-            Palette.dark.setStroke()
+            Palette.dark.withAlphaComponent(1 - cancel).setStroke()
             arc.stroke()
+
+            if cancel > 0 {
+                let mark = circle.insetBy(dx: 9, dy: 9)
+                let cross = NSBezierPath()
+                cross.move(to: NSPoint(x: mark.minX, y: mark.minY)); cross.line(to: NSPoint(x: mark.maxX, y: mark.maxY))
+                cross.move(to: NSPoint(x: mark.minX, y: mark.maxY)); cross.line(to: NSPoint(x: mark.maxX, y: mark.minY))
+                cross.lineWidth = 2
+                cross.lineCapStyle = .round
+                NSColor.white.withAlphaComponent(cancel).setStroke()
+                cross.stroke()
+            }
         } else {
             Self.drawRobot(in: circle.insetBy(dx: 5, dy: 5))
         }
@@ -262,6 +294,7 @@ private final class OverlayView: NSView {
 extension OverlayView: NSViewToolTipOwner {
     func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint,
               userData data: UnsafeMutableRawPointer?) -> String {
+        if busy { return hovered == .circle ? "Cancel" : "" }
         switch action(at: point) {
         case .translateToEnglish: return "Translate to English"
         case .paraphrase: return point.x < bounds.width - bounds.height ? "Paraphrase" : "Text Tool"
@@ -287,6 +320,7 @@ final class OverlayWindow {
     private var hovered = false
 
     var onAction: ((TextAction) -> Void)? { didSet { view.onAction = onAction } }
+    var onCancel: (() -> Void)? { didSet { view.onCancel = onCancel } }
     private(set) var isBusy = false
 
     init() {
@@ -323,13 +357,16 @@ final class OverlayWindow {
         panel.orderOut(nil)
     }
 
-    /// Places the button at the bottom-right inside `axFrame` (global coordinates, top-left origin).
+    /// Places the button at the right edge of `axFrame` (centred if the field is short, else bottom) (global coordinates, top-left origin).
     func show(at axFrame: CGRect) {
         guard let primary = NSScreen.screens.first else { return }
         let s = Self.size
         // AX y grows downward from the primary screen's top edge; Cocoa y grows upward from its bottom edge.
         var x = axFrame.maxX - s - Self.margin
-        var y = primary.frame.height - (axFrame.maxY - Self.margin)
+        // Short fields (up to 3x the button) get the button centred; taller ones keep it bottom-right.
+        var y = axFrame.height <= s * 3
+            ? primary.frame.height - axFrame.midY - s / 2
+            : primary.frame.height - (axFrame.maxY - Self.margin)
 
         let probe = NSRect(x: x, y: y, width: s, height: s)
         if let screen = NSScreen.screens.first(where: { $0.frame.intersects(probe) }) {

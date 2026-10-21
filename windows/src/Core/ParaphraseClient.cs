@@ -9,7 +9,14 @@ namespace ParaphraseTool.Core
 {
     public static class ParaphraseClient
     {
-        static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(120) };
+        // A dead or stale connection fails fast (connect timeout, short idle lifetime) and is retried once,
+        // so a restart on the server costs seconds instead of a long hang.
+        static readonly HttpClient Http = new(new SocketsHttpHandler
+        {
+            ConnectTimeout = TimeSpan.FromSeconds(8),
+            PooledConnectionIdleTimeout = TimeSpan.FromSeconds(45),
+            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+        }) { Timeout = TimeSpan.FromSeconds(45) };
 
         /// <summary>Accepts either the base URL or the full endpoint URL and returns the base URL.</summary>
         public static string NormalizeServerUrl(string? url)
@@ -40,13 +47,35 @@ namespace ParaphraseTool.Core
                 ? JsonSerializer.Serialize(new { text, target_language = "English" })
                 : JsonSerializer.Serialize(new { text, style = TextHygiene.StripLoneSurrogates(settings.EffectiveStyle) });
 
-            using var req = new HttpRequestMessage(HttpMethod.Post, serverUrl + action.Path())
+            HttpRequestMessage NewRequest()
             {
-                Content = new StringContent(body, new UTF8Encoding(false), "application/json"),
-            };
-            req.Headers.Add("X-API-Key", apiKey);
+                var req = new HttpRequestMessage(HttpMethod.Post, serverUrl + action.Path())
+                {
+                    Content = new StringContent(body, new UTF8Encoding(false), "application/json"),
+                };
+                req.Headers.Add("X-API-Key", apiKey);
+                return req;
+            }
 
-            using var resp = await Http.SendAsync(req, ct).ConfigureAwait(false);
+            HttpResponseMessage resp;
+            try
+            {
+                using var first = NewRequest();
+                resp = await Http.SendAsync(first, ct).ConfigureAwait(false);
+            }
+            catch (HttpRequestException ex)
+            {
+                // Connection-level failure (no HTTP response at all): safe to try once more.
+                DebugLog.Write($"{action} connection failed ({ex.Message}); retrying once");
+                using var second = NewRequest();
+                resp = await Http.SendAsync(second, ct).ConfigureAwait(false);
+            }
+            catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new TimeoutException("The server took too long to respond.");
+            }
+
+            using var _ = resp;
             // Decode as UTF-8 ourselves rather than trusting a missing/incorrect charset header.
             var json = Encoding.UTF8.GetString(await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false));
 
