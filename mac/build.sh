@@ -27,9 +27,11 @@ rm -rf dist
 mkdir -p "$APP/Contents/MacOS"
 cp "$BIN" "$APP/Contents/MacOS/ParaphraseTool"
 cp Info.plist "$APP/Contents/Info.plist"
+VERSION="$(tr -d '[:space:]' < ../VERSION)"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
 
 # Ad-hoc signature so macOS keeps the Accessibility permission tied to this bundle.
 codesign --force --deep --sign - "$APP"
 
-echo "Done: $(pwd)/$APP"
+echo "Done: $(pwd)/$APP (version $VERSION)"
 if [[ "${1:-}" != "nolaunch" ]]; then open "$APP"; fi

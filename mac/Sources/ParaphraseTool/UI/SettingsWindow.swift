@@ -22,11 +22,14 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         save.keyEquivalent = "\r"
         let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelClicked))
         cancel.keyEquivalent = "\u{1b}"
-        let buttons = NSStackView(views: [cancel, save])
-        buttons.spacing = 8
+        let versionLabel = NSTextField(labelWithString: "Version \(AppInfo.version)")
+        versionLabel.textColor = .secondaryLabelColor
+        let footer = NSStackView(views: [versionLabel, NSView(), cancel, save])
+        footer.spacing = 8
+        footer.widthAnchor.constraint(equalToConstant: 408).isActive = true
 
         let stack = NSStackView(views: [
-            label("Server URL"), server, label("API key"), key, label("Paraphrase style"), style, startup, buttons,
+            label("Server URL"), server, label("API key"), key, label("Paraphrase style"), style, startup, footer,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -37,7 +40,6 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         stack.setCustomSpacing(14, after: style)
         stack.setCustomSpacing(16, after: startup)
         for field in [server, key, style] { field.widthAnchor.constraint(equalToConstant: 408).isActive = true }
-        buttons.setHuggingPriority(.required, for: .horizontal)
 
         window.contentView = stack
         window.setContentSize(stack.fittingSize)

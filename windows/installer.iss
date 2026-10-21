@@ -1,10 +1,15 @@
+; Version comes from ../VERSION: iscc /DAppVersion=$(cat ../VERSION) installer.iss
+#ifndef AppVersion
+  #define AppVersion "1.0.0"
+#endif
+
 [Setup]
 AppName=Paraphrase Tool
-AppVersion=1.0.0
+AppVersion={#AppVersion}
 DefaultDirName={autopf}\ParaphraseTool
 DefaultGroupName=Paraphrase Tool
 OutputDir=dist
-OutputBaseFilename=ParaphraseToolSetup
+OutputBaseFilename=ParaphraseToolSetup-{#AppVersion}
 PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64compatible
 Compression=lzma2

@@ -11,6 +11,9 @@
     <RootNamespace>ParaphraseTool</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- Single source of truth for the version: the VERSION file at the repo root. -->
+    <VersionFile>$(MSBuildThisFileDirectory)../VERSION</VersionFile>
+    <Version Condition="Exists('$(VersionFile)')">$([System.IO.File]::ReadAllText('$(VersionFile)').Trim())</Version>
   </PropertyGroup>
 
   <!-- App.xaml lives under src/, so the SDK doesn't pick it up as the application definition on its own. -->

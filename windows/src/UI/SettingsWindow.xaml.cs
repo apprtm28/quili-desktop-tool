@@ -11,6 +11,7 @@ namespace ParaphraseTool.UI
         {
             InitializeComponent();
             _settings = settings;
+            VersionText.Text = $"Version {AppInfo.Version}";
             KeyBox.Password = settings.ApiKey;
             ServerBox.Text = ParaphraseClient.NormalizeServerUrl(settings.ServerUrl);
             StyleBox.Text = settings.Style;

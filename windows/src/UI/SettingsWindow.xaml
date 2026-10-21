@@ -15,9 +15,12 @@
 
         <CheckBox x:Name="StartupBox" Content="Start with Windows" Margin="0,0,0,16" />
 
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button Content="Save" Width="80" IsDefault="True" Margin="0,0,8,0" Click="Save_Click" />
-            <Button Content="Cancel" Width="80" IsCancel="True" />
-        </StackPanel>
+        <Grid>
+            <TextBlock x:Name="VersionText" Foreground="Gray" VerticalAlignment="Center" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="Save" Width="80" IsDefault="True" Margin="0,0,8,0" Click="Save_Click" />
+                <Button Content="Cancel" Width="80" IsCancel="True" />
+            </StackPanel>
+        </Grid>
     </StackPanel>
 </Window>

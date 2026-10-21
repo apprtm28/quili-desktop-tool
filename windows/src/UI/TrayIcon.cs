@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.Windows.Forms;
+using ParaphraseTool.Core;
 
 namespace ParaphraseTool.UI
 {
@@ -21,7 +22,7 @@ namespace ParaphraseTool.UI
             _icon = new NotifyIcon
             {
                 Icon = SystemIcons.Application,
-                Text = "Paraphrase Tool",
+                Text = $"Paraphrase Tool {AppInfo.Version}",
                 ContextMenuStrip = menu,
                 Visible = true,
             };
