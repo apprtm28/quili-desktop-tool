@@ -20,6 +20,21 @@ namespace ParaphraseTool.Platform
         [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
         [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
         public const int SW_RESTORE = 9;
+
+        /// <summary>
+        /// Brings a window to the front and gives it focus. Windows only lets the foreground thread hand off
+        /// focus, so this briefly attaches to its input queue.
+        /// </summary>
+        public static void ForceForeground(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return;
+            if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+            var current = GetCurrentThreadId();
+            var fgThread = GetWindowThreadProcessId(GetForegroundWindow(), out _);
+            AttachThreadInput(current, fgThread, true);
+            SetForegroundWindow(hwnd);
+            AttachThreadInput(current, fgThread, false);
+        }
         [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
         [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
         [DllImport("user32.dll")]

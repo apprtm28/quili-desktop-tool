@@ -31,6 +31,7 @@ namespace ParaphraseTool
             _dispatcher = dispatcher;
             _notify = notify;
             _overlay.ActionRequested += action => _ = RunAsync(action);
+            _overlay.SettingsRequested += () => SettingsRequested?.Invoke();
             _overlay.CancelRequested += () =>
             {
                 if (_writing) return;
@@ -39,6 +40,9 @@ namespace ParaphraseTool
             };
             _tracker.TargetChanged += t => _dispatcher.BeginInvoke(() => OnTargetChanged(t));
         }
+
+        /// <summary>The gear in the pill was clicked.</summary>
+        public event Action? SettingsRequested;
 
         public void Start() => _tracker.Start();
 
@@ -58,9 +62,11 @@ namespace ParaphraseTool
             // Keep the button where it is while a request is running; the result is validated afterwards.
             if (_overlay.IsBusy) return;
 
+            // Same field as before (just moved or resized): a button the user dragged stays where they put it.
+            bool sameField = target != null && _current != null && FocusTracker.SameElement(_current.Element, target.Element);
             _current = target;
             if (target == null) _overlay.HideOverlay();
-            else _overlay.ShowAt(target.Bounds);
+            else _overlay.ShowAt(target.Bounds, sameField);
         }
 
         async Task RunAsync(TextAction action)

@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Accessibility permission is required to read other apps' fields and to send Cmd+V.
         AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
 
+        controller.onOpenSettings = { [weak self] in self?.openSettings() }
         controller.start()
 
         if settings.apiKey.isEmpty || settings.serverUrl.isEmpty { settingsWindow.show() }
@@ -25,7 +26,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buildStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.title = "✦"
+        // The robot icon from the app bundle; plain text when running outside a bundle (e.g. `swift run`).
+        if Bundle.main.bundlePath.hasSuffix(".app"), let icon = NSApp.applicationIconImage?.copy() as? NSImage {
+            icon.size = NSSize(width: 18, height: 18)
+            item.button?.image = icon
+        } else {
+            item.button?.title = "✦"
+        }
         item.button?.toolTip = "Paraphrase Tool \(AppInfo.version)"
         let menu = NSMenu()
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self

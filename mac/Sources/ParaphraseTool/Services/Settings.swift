@@ -4,8 +4,13 @@ import ServiceManagement
 
 /// Server URL and style live in UserDefaults; the API key lives in the Keychain.
 final class Settings {
-    static let defaultStyle = "Paraphrase it with clearly different wording while keeping the meaning and a natural tone."
-    private static let legacyDefaultStyle = "Keep the meaning, improve clarity and flow, and keep a natural tone."
+    static let defaultStyle =
+        "Polish the provided text to improve grammar, verb tenses, clarity, and natural flow while preserving the original meaning, tone, and intent.\n\nKeep the wording and sentence structure as close to the original as possible, making only necessary adjustments. Use natural, conversational English without making it overly formal or complicated.\n\nReturn only the revised text, without explanations or additional commentary."
+    // Earlier defaults: anyone still on one of these never customised it and moves to the current default.
+    private static let legacyDefaultStyles = [
+        "Keep the meaning, improve clarity and flow, and keep a natural tone.",
+        "Paraphrase it with clearly different wording while keeping the meaning and a natural tone.",
+    ]
     static let maxStyleLength = 1000
     private let defaults = UserDefaults.standard
     private let service = "ParaphraseTool", account = "apiKey"
@@ -17,9 +22,9 @@ final class Settings {
 
     var style: String {
         get {
-            // The old default only asked for a light edit; move users who never changed it to the new one.
+            // Move users who never changed the default to the current one.
             let stored = (defaults.string(forKey: "style") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return stored.isEmpty || stored == Settings.legacyDefaultStyle ? Settings.defaultStyle : stored
+            return stored.isEmpty || Settings.legacyDefaultStyles.contains(stored) ? Settings.defaultStyle : stored
         }
         set { defaults.set(newValue.isEmpty ? Settings.defaultStyle : newValue, forKey: "style") }
     }

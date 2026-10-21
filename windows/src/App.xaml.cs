@@ -23,6 +23,7 @@ namespace ParaphraseTool
 
             _tray = new TrayIcon(ShowSettings, paused => _controller!.Paused = paused, Shutdown);
             _controller = new ParaphraseController(_settings, Dispatcher, _tray.Notify);
+            _controller.SettingsRequested += ShowSettings;
             _controller.Start();
 
             if (string.IsNullOrEmpty(_settings.ApiKey) || string.IsNullOrEmpty(_settings.ServerUrl)) ShowSettings();

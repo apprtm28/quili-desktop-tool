@@ -17,6 +17,7 @@ final class ParaphraseController {
             guard let self, self.request == nil else { return }
             self.request = Task { await self.run(action) }
         }
+        overlay.onSettings = { [weak self] in self?.onOpenSettings?() }
         overlay.onCancel = { [weak self] in
             guard let self, !self.writing else { return }
             DebugLog.write("cancel requested; dropping the connection")
@@ -24,6 +25,9 @@ final class ParaphraseController {
         }
         tracker.onChange = { [weak self] target in self?.targetChanged(target) }
     }
+
+    /// The gear in the pill was clicked.
+    var onOpenSettings: (() -> Void)?
 
     func start() { tracker.start() }
 
@@ -38,8 +42,10 @@ final class ParaphraseController {
     private func targetChanged(_ target: TextTarget?) {
         // Keep the button where it is while a request is running; the result is validated afterwards.
         if overlay.isBusy { return }
+        // Same field as before (just moved or resized): a button the user dragged stays where they put it.
+        let sameField = target != nil && current != nil && CFEqual(current!.element, target!.element)
         current = target
-        if let target { overlay.show(at: target.frame) } else { overlay.hide() }
+        if let target { overlay.show(at: target.frame, sameField: sameField) } else { overlay.hide() }
     }
 
     private func run(_ action: TextAction) async {

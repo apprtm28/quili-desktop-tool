@@ -19,6 +19,13 @@ private final class OverlayView: NSView {
     var onAction: ((TextAction) -> Void)?
     var onHover: ((Bool) -> Void)?
     var onCancel: (() -> Void)?
+    var onSettings: (() -> Void)?
+    /// Dragging: called once when a drag starts, then with each movement in screen points (Cocoa coordinates).
+    var onDragStart: (() -> Void)?
+    var onDrag: ((CGFloat, CGFloat) -> Void)?
+    private var dragLast = NSPoint.zero, dragOrigin = NSPoint.zero
+    private var dragging = false
+    private static let dragThreshold: CGFloat = 4
     /// While busy, the round button turns into "Cancel" on hover. The click that started the request must
     /// not cancel it, so the pointer has to leave the button first.
     private var cancelReady = false
@@ -39,7 +46,7 @@ private final class OverlayView: NSView {
     }
 
     // Hover / press feedback so the buttons read as clickable.
-    private enum Region: CaseIterable { case translate, paraphrase, circle }
+    private enum Region: CaseIterable { case settings, translate, paraphrase, circle }
     private var hovered: Region? { didSet { if hovered != oldValue { startHoverAnimation(); updateCursor() } } }
     private var pressed: Region? { didSet { if pressed != oldValue { startHoverAnimation() } } }
     private var hoverAmount: [Region: CGFloat] = [:]   // 0…1, eased toward the target each frame
@@ -58,8 +65,11 @@ private final class OverlayView: NSView {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    // The round button ("Text Tool") and the Paraphrase action both paraphrase; EN translates to English.
+    // The sparkle paraphrases and EN translates to English; the round button ("Text Tool") only cancels a running request.
     override func mouseDown(with event: NSEvent) {
+        dragOrigin = NSEvent.mouseLocation
+        dragLast = dragOrigin
+        dragging = false
         if busy {
             if hovered == .circle { pressed = .circle }
             return
@@ -67,13 +77,33 @@ private final class OverlayView: NSView {
         pressed = region(at: convert(event.locationInWindow, from: nil))
     }
 
+    // Press and move more than a few points to pick the button up; a click without movement runs the action.
+    override func mouseDragged(with event: NSEvent) {
+        let now = NSEvent.mouseLocation
+        if !dragging {
+            guard abs(now.x - dragOrigin.x) >= Self.dragThreshold || abs(now.y - dragOrigin.y) >= Self.dragThreshold else { return }
+            dragging = true
+            pressed = nil
+            onDragStart?()
+        }
+        onDrag?(now.x - dragLast.x, now.y - dragLast.y)
+        dragLast = now
+    }
+
     override func mouseUp(with event: NSEvent) {
         pressed = nil
+        if dragging { dragging = false; return }
         if busy {
             if hovered == .circle { onCancel?() }
             return
         }
-        onAction?(action(at: convert(event.locationInWindow, from: nil)))
+        // Only the action buttons start work; the green button is a drag handle (and Cancel while busy).
+        switch region(at: convert(event.locationInWindow, from: nil)) {
+        case .settings: onSettings?()
+        case .translate: onAction?(.translateToEnglish)
+        case .paraphrase: onAction?(.paraphrase)
+        default: break
+        }
     }
 
     private func region(at point: NSPoint) -> Region? {
@@ -81,6 +111,7 @@ private final class OverlayView: NSView {
         guard expansion > 0.5 else { return nil }
         if point.x >= paraphraseMinX { return .paraphrase }
         if point.x >= paraphraseMinX - Self.actionWidth { return .translate }
+        if point.x >= paraphraseMinX - 2 * Self.actionWidth { return .settings }
         return nil
     }
 
@@ -128,12 +159,6 @@ private final class OverlayView: NSView {
     }
 
     private var paraphraseMinX: CGFloat { bounds.width - bounds.height - Self.actionWidth }
-
-    private func action(at point: NSPoint) -> TextAction {
-        let translateMinX = paraphraseMinX - Self.actionWidth
-        if expansion > 0.5, point.x >= translateMinX, point.x < paraphraseMinX { return .translateToEnglish }
-        return .paraphrase
-    }
 
     // One tooltip over the whole view whose text depends on which part is hovered.
     override func setFrameSize(_ newSize: NSSize) {
@@ -192,9 +217,10 @@ private final class OverlayView: NSView {
             // Actions are anchored to the round button, so they slide out with the pill.
             let paraphrase = NSRect(x: paraphraseMinX, y: 0, width: Self.actionWidth, height: h)
             let translate = paraphrase.offsetBy(dx: -Self.actionWidth, dy: 0)
+            let settings = translate.offsetBy(dx: -Self.actionWidth, dy: 0)
 
             // A soft green highlight fades in behind the hovered action.
-            for (region, rect) in [(Region.paraphrase, paraphrase), (Region.translate, translate)] {
+            for (region, rect) in [(Region.paraphrase, paraphrase), (Region.translate, translate), (Region.settings, settings)] {
                 Palette.green.withAlphaComponent(0.18 * (hoverAmount[region] ?? 0) * actionAlpha).setFill()
                 // Same corner setting as the pill: square on the side docked to the field, soft on the other.
                 let r = dock == .floating ? 11 : Self.dockedRadius
@@ -206,6 +232,11 @@ private final class OverlayView: NSView {
                 Palette.green.withAlphaComponent(actionAlpha).setFill()
                 Self.star(center: NSPoint(x: paraphrase.midX - 1, y: paraphrase.midY - 1), radius: 7).fill()
                 Self.star(center: NSPoint(x: paraphrase.midX + 6, y: paraphrase.midY + 6), radius: 3).fill()
+            }
+
+            drawScaled(.settings, around: NSPoint(x: settings.midX, y: settings.midY)) {
+                Palette.green.withAlphaComponent(actionAlpha).setFill()
+                Self.gear(center: NSPoint(x: settings.midX, y: settings.midY), radius: 7.5).fill()
             }
 
             drawScaled(.translate, around: NSPoint(x: translate.midX, y: translate.midY)) {
@@ -288,6 +319,27 @@ private final class OverlayView: NSView {
         return p
     }
 
+    /// Cog with eight teeth and a hole in the middle.
+    private static func gear(center c: NSPoint, radius r: CGFloat) -> NSBezierPath {
+        let teeth = 8, step = 2 * CGFloat.pi / CGFloat(teeth), inner = r * 0.78
+        func point(_ radius: CGFloat, _ angle: CGFloat) -> NSPoint {
+            NSPoint(x: c.x + radius * cos(angle), y: c.y + radius * sin(angle))
+        }
+        let p = NSBezierPath()
+        for i in 0..<teeth {
+            let a = CGFloat(i) * step
+            let corners = [(inner, a - 0.30 * step), (r, a - 0.17 * step), (r, a + 0.17 * step), (inner, a + 0.30 * step)]
+            for (index, corner) in corners.enumerated() {
+                let pt = point(corner.0, corner.1)
+                if i == 0 && index == 0 { p.move(to: pt) } else { p.line(to: pt) }
+            }
+        }
+        p.close()
+        p.appendOval(in: NSRect(x: c.x - r * 0.38, y: c.y - r * 0.38, width: r * 0.76, height: r * 0.76))
+        p.windingRule = .evenOdd
+        return p
+    }
+
     /// Four-point sparkle.
     private static func star(center c: NSPoint, radius r: CGFloat) -> NSBezierPath {
         let p = NSBezierPath()
@@ -325,16 +377,18 @@ extension OverlayView: NSViewToolTipOwner {
     func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint,
               userData data: UnsafeMutableRawPointer?) -> String {
         if busy { return hovered == .circle ? "Cancel" : "" }
-        switch action(at: point) {
-        case .translateToEnglish: return "Translate to English"
-        case .paraphrase: return point.x < bounds.width - bounds.height ? "Paraphrase" : "Text Tool"
+        switch region(at: point) {
+        case .settings: return "Settings"
+        case .translate: return "Translate to English"
+        case .paraphrase: return "Paraphrase"
+        default: return "Text Tool"
         }
     }
 }
 
 @MainActor
 final class OverlayWindow {
-    private static let size: CGFloat = 28, expandedWidth: CGFloat = 102, margin: CGFloat = 6, wideFieldFactor: CGFloat = 10, dockOffset: CGFloat = 6
+    private static let size: CGFloat = 28, expandedWidth: CGFloat = 138, margin: CGFloat = 6, wideFieldFactor: CGFloat = 10, dockOffset: CGFloat = 6
     // Time-based easing (not a fixed step per tick) so the pill glides at the display's frame rate.
     private static let expandDuration: TimeInterval = 0.23, collapseDuration: TimeInterval = 0.17
 
@@ -348,9 +402,11 @@ final class OverlayWindow {
     private var anchor = NSPoint.zero
     private var expansion: CGFloat = 0
     private var hovered = false
+    private var userMoved = false   // the user dragged the button; keep it there until focus moves to another field
 
     var onAction: ((TextAction) -> Void)? { didSet { view.onAction = onAction } }
     var onCancel: (() -> Void)? { didSet { view.onCancel = onCancel } }
+    var onSettings: (() -> Void)? { didSet { view.onSettings = onSettings } }
     private(set) var isBusy = false
 
     init() {
@@ -369,6 +425,12 @@ final class OverlayWindow {
             self?.hovered = inside
             self?.startAnimating()
         }
+        // Dragging: docked (design 2) it turns into the floating pill (design 1) as soon as it is picked up.
+        view.onDragStart = { [weak self] in
+            self?.userMoved = true
+            self?.view.dock = .floating
+        }
+        view.onDrag = { [weak self] dx, dy in self?.moveAnchor(dx: dx, dy: dy) }
     }
 
     func setBusy(_ busy: Bool) {
@@ -377,7 +439,19 @@ final class OverlayWindow {
         startAnimating() // collapse while busy, re-expand if still hovered afterwards
     }
 
+    private func moveAnchor(dx: CGFloat, dy: CGFloat) {
+        var x = anchor.x + dx, y = anchor.y + dy
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) }) {
+            let v = screen.visibleFrame
+            x = max(v.minX + (Self.expandedWidth - Self.size), min(x, v.maxX - Self.size))
+            y = max(v.minY, min(y, v.maxY - Self.size))
+        }
+        anchor = NSPoint(x: x, y: y)
+        applyLayout()
+    }
+
     func hide() {
+        userMoved = false // focus lost: the next field starts from its default placement
         animation?.invalidate()
         animation = nil
         animTarget = 0
@@ -389,7 +463,10 @@ final class OverlayWindow {
 
     /// Places the button at the right edge of `axFrame` (global coordinates, top-left origin): floating inside wide fields,
     /// docked below (or above) narrower ones.
-    func show(at axFrame: CGRect) {
+    /// When `sameField` is true and the user has dragged the button, it stays where they put it.
+    func show(at axFrame: CGRect, sameField: Bool = false) {
+        if userMoved && sameField { return }
+        userMoved = false
         guard let primary = NSScreen.screens.first else { return }
         let s = Self.size
         // AX y grows downward from the primary screen's top edge; Cocoa y grows upward from its bottom edge.

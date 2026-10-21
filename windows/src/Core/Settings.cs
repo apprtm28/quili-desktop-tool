@@ -10,8 +10,14 @@ namespace ParaphraseTool.Core
 {
     public class Settings
     {
-        public const string DefaultStyle = "Paraphrase it with clearly different wording while keeping the meaning and a natural tone.";
-        const string LegacyDefaultStyle = "Keep the meaning, improve clarity and flow, and keep a natural tone.";
+        public const string DefaultStyle =
+            "Polish the provided text to improve grammar, verb tenses, clarity, and natural flow while preserving the original meaning, tone, and intent.\n\nKeep the wording and sentence structure as close to the original as possible, making only necessary adjustments. Use natural, conversational English without making it overly formal or complicated.\n\nReturn only the revised text, without explanations or additional commentary.";
+        // Earlier defaults: anyone still on one of these never customised it and moves to the current default.
+        static readonly string[] LegacyDefaultStyles =
+        {
+            "Keep the meaning, improve clarity and flow, and keep a natural tone.",
+            "Paraphrase it with clearly different wording while keeping the meaning and a natural tone.",
+        };
         public const int MaxStyleLength = 1000;
 
         public string ApiKeyProtected { get; set; } = "";
@@ -65,8 +71,8 @@ namespace ParaphraseTool.Core
                 if (File.Exists(FilePath))
                 {
                     var loaded = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? new Settings();
-                    // The old default only asked for a light edit; move users who never changed it to the new one.
-                    if (string.IsNullOrWhiteSpace(loaded.Style) || loaded.Style.Trim() == LegacyDefaultStyle)
+                    // Move users who never changed the default to the current one.
+                    if (string.IsNullOrWhiteSpace(loaded.Style) || Array.IndexOf(LegacyDefaultStyles, loaded.Style.Trim()) >= 0)
                         loaded.Style = DefaultStyle;
                     return loaded;
                 }

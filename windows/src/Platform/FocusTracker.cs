@@ -57,6 +57,8 @@ namespace ParaphraseTool.Platform
             return a.Bounds == b.Bounds && SafeCompare(a.Element, b.Element);
         }
 
+        public static bool SameElement(AutomationElement a, AutomationElement b) => SafeCompare(a, b);
+
         static bool SafeCompare(AutomationElement a, AutomationElement b)
         {
             try { return Automation.Compare(a, b); } catch (Exception) { return false; }
@@ -106,12 +108,7 @@ namespace ParaphraseTool.Platform
             if (hwnd == IntPtr.Zero) return false;
             try
             {
-                if (Native.IsIconic(hwnd)) Native.ShowWindow(hwnd, Native.SW_RESTORE);
-                var current = Native.GetCurrentThreadId();
-                var fgThread = Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out _);
-                Native.AttachThreadInput(current, fgThread, true);
-                Native.SetForegroundWindow(hwnd);
-                Native.AttachThreadInput(current, fgThread, false);
+                Native.ForceForeground(hwnd);
 
                 await System.Threading.Tasks.Task.Delay(200);
                 await System.Threading.Tasks.Task.Run(() => { try { element.SetFocus(); } catch (Exception) { } });

@@ -10,6 +10,7 @@
     <AssemblyName>ParaphraseTool</AssemblyName>
     <RootNamespace>ParaphraseTool</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>assets\app.ico</ApplicationIcon>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <!-- Single source of truth for the version: the VERSION file at the repo root. -->
     <VersionFile>$(MSBuildThisFileDirectory)../VERSION</VersionFile>
@@ -20,6 +21,10 @@
   <ItemGroup>
     <Page Remove="src\App.xaml" />
     <ApplicationDefinition Include="src\App.xaml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="assets\app.ico" />
   </ItemGroup>
 
   <ItemGroup>

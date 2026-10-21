@@ -61,6 +61,13 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         stack.setCustomSpacing(8, after: startup)
         stack.setCustomSpacing(16, after: repoLink)
         for field in [server, key, style] { field.widthAnchor.constraint(equalToConstant: 408).isActive = true }
+        // The instruction is several lines long: wrap it (Option-Return adds a line break) and give it room.
+        style.usesSingleLineMode = false
+        style.cell?.wraps = true
+        style.cell?.isScrollable = false
+        style.lineBreakMode = .byWordWrapping
+        style.maximumNumberOfLines = 0
+        style.heightAnchor.constraint(equalToConstant: 110).isActive = true
 
         window.contentView = stack
         window.setContentSize(stack.fittingSize)
@@ -78,8 +85,11 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         style.stringValue = settings.style
         startup.state = settings.runAtStartup ? .on : .off
         window.center()
+        // Opened from the overlay, the app isn't frontmost: raise the window above everything and focus it.
+        window.level = .floating
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
 
     @objc private func saveClicked() {

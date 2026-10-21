@@ -4,6 +4,8 @@
 #endif
 
 [Setup]
+SetupIconFile=assets\app.ico
+UninstallDisplayIcon={app}\ParaphraseTool.exe
 AppName=Paraphrase Tool
 AppVersion={#AppVersion}
 DefaultDirName={autopf}\ParaphraseTool
