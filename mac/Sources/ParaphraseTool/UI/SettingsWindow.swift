@@ -7,11 +7,19 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
     private let server = NSTextField()
     private let key = NSSecureTextField()
     private let style = NSTextField()
+    private let styleHint: NSTextField = {
+        let hint = NSTextField(wrappingLabelWithString:
+            "Sent to the AI as the command for every paraphrase. Examples: Make it more formal · Shorter and punchier · Friendly and casual · Translate to English · Make it 3 bullet points")
+        hint.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        hint.textColor = .secondaryLabelColor
+        hint.preferredMaxLayoutWidth = 408
+        return hint
+    }()
     private let startup = NSButton(checkboxWithTitle: "Start at login", target: nil, action: nil)
 
     init(settings: Settings) {
         self.settings = settings
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 260),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 320),
                           styleMask: [.titled, .closable], backing: .buffered, defer: false)
         super.init()
         window.title = "Paraphrase Tool – Settings"
@@ -29,7 +37,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         footer.widthAnchor.constraint(equalToConstant: 408).isActive = true
 
         let stack = NSStackView(views: [
-            label("Server URL"), server, label("API key"), key, label("Paraphrase style"), style, startup, footer,
+            label("Server URL"), server, label("API key"), key, label("Paraphrase instruction"), styleHint, style, startup, footer,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -38,6 +46,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         stack.setCustomSpacing(14, after: server)
         stack.setCustomSpacing(14, after: key)
         stack.setCustomSpacing(14, after: style)
+        stack.setCustomSpacing(4, after: styleHint)
         stack.setCustomSpacing(16, after: startup)
         for field in [server, key, style] { field.widthAnchor.constraint(equalToConstant: 408).isActive = true }
 

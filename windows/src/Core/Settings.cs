@@ -10,7 +10,9 @@ namespace ParaphraseTool.Core
 {
     public class Settings
     {
-        public const string DefaultStyle = "Keep the meaning, improve clarity and flow, and keep a natural tone.";
+        public const string DefaultStyle = "Paraphrase it with clearly different wording while keeping the meaning and a natural tone.";
+        const string LegacyDefaultStyle = "Keep the meaning, improve clarity and flow, and keep a natural tone.";
+        public const int MaxStyleLength = 1000;
 
         public string ApiKeyProtected { get; set; } = "";
         public string ServerUrl { get; set; } = "";
@@ -44,12 +46,30 @@ namespace ParaphraseTool.Core
             }
         }
 
+        /// <summary>The instruction sent to the server as the paraphrase command (never empty, length-capped).</summary>
+        [JsonIgnore]
+        public string EffectiveStyle
+        {
+            get
+            {
+                var s = (Style ?? "").Trim();
+                if (s.Length == 0) return DefaultStyle;
+                return s.Length > MaxStyleLength ? s[..MaxStyleLength] : s;
+            }
+        }
+
         public static Settings Load()
         {
             try
             {
                 if (File.Exists(FilePath))
-                    return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? new Settings();
+                {
+                    var loaded = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath)) ?? new Settings();
+                    // The old default only asked for a light edit; move users who never changed it to the new one.
+                    if (string.IsNullOrWhiteSpace(loaded.Style) || loaded.Style.Trim() == LegacyDefaultStyle)
+                        loaded.Style = DefaultStyle;
+                    return loaded;
+                }
             }
             catch (Exception) { }
             return new Settings();

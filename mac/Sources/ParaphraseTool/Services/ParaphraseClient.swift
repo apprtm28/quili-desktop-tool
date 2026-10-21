@@ -29,7 +29,7 @@ enum ParaphraseClient {
         req.httpMethod = "POST"
         req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": text, "style": settings.style])
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": text, "style": settings.effectiveStyle])
 
         DebugLog.write("paraphrase request: POST \(url) (\(TextHygiene.describe(text)))")
         let (data, resp) = try await URLSession.shared.data(for: req)

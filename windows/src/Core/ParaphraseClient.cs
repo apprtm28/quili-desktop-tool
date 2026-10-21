@@ -31,7 +31,7 @@ namespace ParaphraseTool.Core
             DebugLog.Write($"paraphrase request: POST {serverUrl}/api/paraphrase ({TextHygiene.Describe(text)})");
             // The default encoder escapes every non-ASCII character (\uD83D\uDE00), so emoji cannot be
             // mangled in transit; the body is also sent explicitly as UTF-8.
-            var body = JsonSerializer.Serialize(new { text, style = TextHygiene.StripLoneSurrogates(settings.Style) });
+            var body = JsonSerializer.Serialize(new { text, style = TextHygiene.StripLoneSurrogates(settings.EffectiveStyle) });
 
             using var req = new HttpRequestMessage(HttpMethod.Post, serverUrl + "/api/paraphrase")
             {
