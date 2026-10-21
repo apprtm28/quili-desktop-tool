@@ -7,8 +7,10 @@ final class ParaphraseController {
     private let settings: Settings
     private let tracker = FocusTracker()
     private let overlay = OverlayWindow()
+    private let bubble = BubbleWindow()
     private var current: TextTarget?
     private var request: Task<Void, Never>?
+    private var previewing = false // late streamed updates must not re-show the bubble after the request ended
     private var writing = false // once the field is being written, cancelling would leave it half-replaced
 
     init(settings: Settings) {
@@ -35,7 +37,7 @@ final class ParaphraseController {
         get { tracker.paused }
         set {
             tracker.paused = newValue
-            if newValue { overlay.hide() }
+            if newValue { overlay.hide(); bubble.hide() }
         }
     }
 
@@ -56,7 +58,10 @@ final class ParaphraseController {
         overlay.setBusy(true)
         writing = false
         let targetApp = NSWorkspace.shared.frontmostApplication
+        previewing = true
         defer {
+            previewing = false
+            bubble.hide()
             writing = false
             overlay.setBusy(false)
         }
@@ -69,7 +74,14 @@ final class ParaphraseController {
                 return
             }
 
-            let result = try await ParaphraseClient.run(field.text, settings: settings, action: action)
+            // The text streams into a bubble beside the button while the model writes it; the field itself is
+            // only touched once the final text is in.
+            let result = try await ParaphraseClient.run(field.text, settings: settings, action: action) { [weak self] partial in
+                guard let self, self.previewing else { return }
+                self.bubble.show(partial, above: self.overlay.frame)
+            }
+            previewing = false
+            bubble.hide()
 
             let (focused, front) = await FocusTracker.focusState(of: target.element)
             if !focused || !front {

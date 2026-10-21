@@ -20,6 +20,7 @@ namespace Quili
         readonly Dispatcher _dispatcher;
         readonly Action<string, string, NoticeLevel> _notify;
         readonly OverlayWindow _overlay = new();
+        readonly BubbleWindow _bubble = new();
         readonly FocusTracker _tracker = new();
         TextTarget? _current;
         CancellationTokenSource? _cts;
@@ -51,7 +52,7 @@ namespace Quili
             set
             {
                 _tracker.Paused = value;
-                if (value) _overlay.HideOverlay();
+                if (value) { _overlay.HideOverlay(); _bubble.HideBubble(); }
             }
         }
 
@@ -79,6 +80,7 @@ namespace Quili
             using var cts = _cts = new CancellationTokenSource();
             _writing = false;
             var targetWindow = Native.GetForegroundWindow();
+            bool previewing = true; // late streamed updates must not re-show the bubble after the request ended
             try
             {
                 var field = await TextAccess.ReadAsync(target.Element);
@@ -89,7 +91,15 @@ namespace Quili
                     return;
                 }
 
-                var result = await ParaphraseClient.RunAsync(field.Text, _settings, action, cts.Token);
+                // The text streams into a bubble beside the button while the model writes it; the field itself is
+                // only touched once the final text is in.
+                var result = await ParaphraseClient.RunAsync(field.Text, _settings, action, cts.Token,
+                    partial => _dispatcher.BeginInvoke(() =>
+                    {
+                        if (previewing && !cts.IsCancellationRequested) _bubble.ShowText(partial, _overlay.Area);
+                    }));
+                previewing = false;
+                _bubble.HideBubble();
 
                 bool focused = FocusTracker.StillFocused(target.Element), front = FocusTracker.IsForeground(target.Element);
                 if (!focused || !front)
@@ -121,6 +131,8 @@ namespace Quili
             }
             finally
             {
+                previewing = false;
+                _bubble.HideBubble();
                 _cts = null;
                 _writing = false;
                 _overlay.SetBusy(false);

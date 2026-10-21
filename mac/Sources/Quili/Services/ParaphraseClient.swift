@@ -10,7 +10,7 @@ enum ParaphraseClient {
     private static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 45
-        config.timeoutIntervalForResource = 45
+        config.timeoutIntervalForResource = 75 // whole streamed response; the server stops at 60s
         config.waitsForConnectivity = false
         return URLSession(configuration: config)
     }()
@@ -30,7 +30,10 @@ enum ParaphraseClient {
         try await run(text, settings: settings, action: .paraphrase)
     }
 
-    static func run(_ text: String, settings: Settings, action: TextAction) async throws -> String {
+    /// Runs the action on the server. `onText` (optional) receives the rewritten text so far while the model is
+    /// still writing it (each call replaces the previous one); the return value is the final, authoritative text.
+    static func run(_ text: String, settings: Settings, action: TextAction,
+                    onText: (@MainActor (String) -> Void)? = nil) async throws -> String {
         let apiKey = settings.apiKey
         let server = normalize(settings.serverUrl)
         guard !apiKey.isEmpty, let url = URL(string: server + action.path), !server.isEmpty else {
@@ -41,22 +44,59 @@ enum ParaphraseClient {
         req.httpMethod = "POST"
         req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        req.setValue("text/event-stream, application/json", forHTTPHeaderField: "Accept")
         // Paraphrase carries the user's instruction; translate always targets English.
-        let body: [String: String] = action == .translateToEnglish
-            ? ["text": text, "target_language": "English"]
-            : ["text": text, "style": settings.effectiveStyle]
+        let body: [String: Any] = action == .translateToEnglish
+            ? ["text": text, "target_language": "English", "stream": true]
+            : ["text": text, "style": settings.effectiveStyle, "stream": true]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         DebugLog.write("\(action) request: POST \(url) (\(TextHygiene.describe(text)))")
-        let (data, resp): (Data, URLResponse)
         do {
-            (data, resp) = try await send(req, action: action)
+            let (bytes, resp) = try await send(req, action: action)
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            DebugLog.write("\(action) response: HTTP \(status)")
+            if (200..<300).contains(status), resp.mimeType == "text/event-stream" {
+                return try await readStream(bytes, action: action, onText: onText)
+            }
+            var data = Data()
+            for try await byte in bytes { data.append(byte) }
+            return try parseJSON(data, status: status, action: action)
         } catch let error as URLError where error.code == .timedOut {
             throw ParaphraseError(message: "The server took too long to respond.")
         }
-        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        DebugLog.write("\(action) response: HTTP \(status)")
+    }
 
+    /// Reads server-sent events: `delta` (text so far), then `done` (final result) or `error`.
+    private static func readStream(_ bytes: URLSession.AsyncBytes, action: TextAction,
+                                   onText: (@MainActor (String) -> Void)?) async throws -> String {
+        var event = ""
+        // `lines` skips blank lines, so an event is handled when its (single-line) data arrives.
+        for try await line in bytes.lines {
+            if line.hasPrefix("event:") { event = line.dropFirst(6).trimmingCharacters(in: .whitespaces); continue }
+            guard line.hasPrefix("data:"),
+                  let payload = try? JSONSerialization.jsonObject(with: Data(line.dropFirst(5).utf8)) as? [String: Any]
+            else { continue }
+            switch event {
+            case "delta":
+                let partial = (payload["text"] as? String ?? "")
+                if !partial.isEmpty, let onText { await onText(partial) }
+            case "done":
+                let out = (payload["text"] as? String ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !out.isEmpty else { throw ParaphraseError(message: "Paraphrase server returned an empty response.") }
+                DebugLog.write("\(action) result: \(TextHygiene.describe(out))")
+                return out
+            case "error":
+                throw ParaphraseError(message: "\(action.verb) server error: \(payload["detail"] ?? "unknown")")
+            default:
+                break
+            }
+        }
+        throw ParaphraseError(message: "The connection closed before the result arrived.")
+    }
+
+    private static func parseJSON(_ data: Data, status: Int, action: TextAction) throws -> String {
         let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         guard (200..<300).contains(status) else {
             var msg = String(data: data, encoding: .utf8) ?? ""
@@ -75,13 +115,13 @@ enum ParaphraseClient {
     }
 
     /// One try, plus one more after a connection-level failure (no HTTP response at all).
-    private static func send(_ req: URLRequest, action: TextAction) async throws -> (Data, URLResponse) {
+    private static func send(_ req: URLRequest, action: TextAction) async throws -> (URLSession.AsyncBytes, URLResponse) {
         do {
-            return try await session.data(for: req)
+            return try await session.bytes(for: req)
         } catch let error as URLError where [.networkConnectionLost, .cannotConnectToHost, .cannotFindHost,
                                               .notConnectedToInternet, .dnsLookupFailed, .secureConnectionFailed].contains(error.code) {
             DebugLog.write("\(action) connection failed (\(error.localizedDescription)); retrying once")
-            return try await session.data(for: req)
+            return try await session.bytes(for: req)
         }
     }
 }

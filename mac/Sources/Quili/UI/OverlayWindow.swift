@@ -357,6 +357,9 @@ final class OverlayWindow {
     var onSettings: (() -> Void)? { didSet { view.onSettings = onSettings } }
     private(set) var isBusy = false
 
+    /// The overlay's current frame in Cocoa screen coordinates; the preview bubble anchors to it.
+    var frame: NSRect { panel.frame }
+
     init() {
         let rect = NSRect(x: 0, y: 0, width: Self.size, height: Self.size)
         view = OverlayView(frame: rect)

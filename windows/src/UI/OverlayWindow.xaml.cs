@@ -30,6 +30,8 @@ namespace Quili.UI
         int _x, _y, _size;
         double _expansion;      // 0 = collapsed, 1 = fully expanded
         bool _hovered;
+        /// <summary>Screen rectangle (pixels) the overlay occupies; empty while hidden. The preview bubble anchors to it.</summary>
+        public System.Drawing.Rectangle Area => OverlayArea;
         System.Drawing.Rectangle OverlayArea;   // where the overlay window currently is (empty until first shown)
         const int DragThresholdPx = 4;
         bool _pressed, _dragging, _dragged;

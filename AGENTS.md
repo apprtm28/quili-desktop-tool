@@ -28,6 +28,7 @@ One app, implemented twice: **Windows** (`windows/`, C# / WPF, .NET 8) and **mac
 | Read / replace text | `Platform/TextAccess.cs`, `Platform/Native.cs` | `Accessibility/TextAccess.swift` |
 | Visible field-edge measurement | `Platform/FieldEdge.cs` | `Accessibility/FieldEdge.swift` |
 | Overlay button and pill | `UI/OverlayWindow.xaml(.cs)` | `UI/OverlayWindow.swift` |
+| Live preview bubble (streamed text) | `UI/BubbleWindow.xaml(.cs)` | `UI/BubbleWindow.swift` |
 | Settings window | `UI/SettingsWindow.xaml(.cs)` | `UI/SettingsWindow.swift` |
 | Icon / glyph geometry, palette | XAML resources | `UI/Glyphs.swift` |
 | Notifications | `UI/TrayIcon.cs` (balloon) | `Services/Notifier.swift` |
@@ -47,6 +48,7 @@ Keep this list current. Anything not listed here is expected to match.
 - Permissions: macOS needs Accessibility, and optionally Screen Recording for `FieldEdge` (Windows samples pixels without a permission).
 - Text-field fonts: Segoe UI vs the system font.
 - Lone-surrogate cleanup exists only on Windows (Swift strings can't hold them).
+- Streaming: both clients send `"stream": true` and read server-sent events (`delta` = text so far, each replacing the previous; then `done` or `error`), showing the text in the click-through bubble above the button (below when there is no room) and only replacing the field once `done` arrives. Windows reads the stream with `StreamReader`, macOS with `URLSession.bytes(...).lines` (which skips blank lines, so an event is handled on its `data:` line). A server that answers plain JSON still works.
 - Overlay cursor: the macOS overlay always shows the regular arrow pointer (requested). Windows still shows a hand over the actions and a size-all cursor on the green button.
 - One-time migration from the app's former name "Paraphrase Tool": Windows copies `%APPDATA%\ParaphraseTool\settings.json` and moves the old `Run` entry; macOS copies the old `UserDefaults` domain `com.ferdibot.paraphrasetool` and the old Keychain item (macOS asks once to allow reading it). These legacy names are the only places the old name should remain.
 - Log location: `%APPDATA%\Quili\debug.log` vs `~/Library/Logs/Quili/debug.log`.
