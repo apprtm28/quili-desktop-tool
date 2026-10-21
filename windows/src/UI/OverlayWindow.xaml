@@ -3,10 +3,45 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowInTaskbar="False" ShowActivated="False" ResizeMode="NoResize"
-        Focusable="False" Width="20" Height="20">
-    <Border x:Name="Chip" CornerRadius="10" Background="#4F46E5" BorderBrush="White" BorderThickness="1"
-            Cursor="Hand" ToolTip="Paraphrase text" MouseLeftButtonUp="Chip_MouseLeftButtonUp">
-        <TextBlock x:Name="Glyph" Text="✦" Foreground="White" FontSize="11"
-                   FontFamily="Segoe UI Symbol" HorizontalAlignment="Center" VerticalAlignment="Center" />
-    </Border>
+        Focusable="False" Width="28" Height="28">
+    <!-- Collapsed: just the green round button on the right. Hovered: a white pill grows to the left
+         with the action buttons (only Paraphrase for now) in front of the round button. -->
+    <Grid x:Name="Root" Background="Transparent" MouseEnter="Root_MouseEnter" MouseLeave="Root_MouseLeave">
+        <Border x:Name="Pill" Background="White" BorderBrush="#26000000" BorderThickness="1"
+                CornerRadius="14" Opacity="0" />
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <Border x:Name="ParaphraseAction" Width="36" Height="26" Opacity="0" Background="Transparent"
+                    Cursor="Hand" ToolTip="Paraphrase" MouseLeftButtonUp="Action_MouseLeftButtonUp">
+                <Viewbox Width="18" Height="18">
+                    <Canvas Width="24" Height="24">
+                        <Path Fill="#3DBE4A"
+                              Data="M9,5 C9.7,9.4 10.6,11.3 15,13 C10.6,14.7 9.7,16.6 9,21 C8.3,16.6 7.4,14.7 3,13 C7.4,11.3 8.3,9.4 9,5 Z" />
+                        <Path Fill="#3DBE4A"
+                              Data="M18,2 C18.3,4.2 18.8,4.7 21,5 C18.8,5.3 18.3,5.8 18,8 C17.7,5.8 17.2,5.3 15,5 C17.2,4.7 17.7,4.2 18,2 Z" />
+                    </Canvas>
+                </Viewbox>
+            </Border>
+
+            <Border x:Name="Chip" Width="26" Height="26" Margin="1" CornerRadius="13" Background="#3DBE4A"
+                    Cursor="Hand" ToolTip="Paraphrase text" MouseLeftButtonUp="Chip_MouseLeftButtonUp">
+                <Grid>
+                    <Viewbox x:Name="Robot" Width="16" Height="16">
+                        <Canvas Width="24" Height="24">
+                            <Line X1="12" Y1="3.5" X2="12" Y2="7" Stroke="#1F2A24" StrokeThickness="1.6" StrokeStartLineCap="Round" />
+                            <Ellipse Canvas.Left="10.4" Canvas.Top="1.6" Width="3.2" Height="3.2" Fill="#1F2A24" />
+                            <Rectangle Canvas.Left="2" Canvas.Top="11" Width="3" Height="5" RadiusX="1.2" RadiusY="1.2" Fill="#1F2A24" />
+                            <Rectangle Canvas.Left="19" Canvas.Top="11" Width="3" Height="5" RadiusX="1.2" RadiusY="1.2" Fill="#1F2A24" />
+                            <Rectangle Canvas.Left="4.5" Canvas.Top="7" Width="15" Height="13" RadiusX="3.5" RadiusY="3.5" Fill="#1F2A24" />
+                            <Ellipse Canvas.Left="8" Canvas.Top="10.8" Width="3.2" Height="3.2" Fill="#3DBE4A" />
+                            <Ellipse Canvas.Left="12.8" Canvas.Top="10.8" Width="3.2" Height="3.2" Fill="#3DBE4A" />
+                            <Line X1="9.5" Y1="16.8" X2="14.5" Y2="16.8" Stroke="#3DBE4A" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                        </Canvas>
+                    </Viewbox>
+                    <TextBlock x:Name="BusyText" Text="…" Visibility="Collapsed" Foreground="#1F2A24" FontSize="15"
+                               FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+        </StackPanel>
+    </Grid>
 </Window>
