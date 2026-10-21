@@ -16,6 +16,17 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         return hint
     }()
     private let startup = NSButton(checkboxWithTitle: "Start at login", target: nil, action: nil)
+    private let repoLink: NSTextField = {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let text = NSMutableAttributedString(string: "Repository: ",
+                                             attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor])
+        text.append(NSAttributedString(string: "github.com/ferdinandimas/desktop-tools",
+                                       attributes: [.font: font, .link: URL(string: AppInfo.repoUrl)!]))
+        let field = NSTextField(labelWithAttributedString: text)
+        field.allowsEditingTextAttributes = true
+        field.isSelectable = true
+        return field
+    }()
 
     init(settings: Settings) {
         self.settings = settings
@@ -37,7 +48,7 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         footer.widthAnchor.constraint(equalToConstant: 408).isActive = true
 
         let stack = NSStackView(views: [
-            label("Server URL"), server, label("API key"), key, label("Paraphrase instruction"), styleHint, style, startup, footer,
+            label("Server URL"), server, label("API key"), key, label("Paraphrase instruction"), styleHint, style, startup, repoLink, footer,
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -47,7 +58,8 @@ final class SettingsWindow: NSObject, NSWindowDelegate {
         stack.setCustomSpacing(14, after: key)
         stack.setCustomSpacing(14, after: style)
         stack.setCustomSpacing(4, after: styleHint)
-        stack.setCustomSpacing(16, after: startup)
+        stack.setCustomSpacing(8, after: startup)
+        stack.setCustomSpacing(16, after: repoLink)
         for field in [server, key, style] { field.widthAnchor.constraint(equalToConstant: 408).isActive = true }
 
         window.contentView = stack

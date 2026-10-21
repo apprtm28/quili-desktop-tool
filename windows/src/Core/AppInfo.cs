@@ -4,6 +4,8 @@ namespace ParaphraseTool.Core
 {
     public static class AppInfo
     {
+        public const string RepoUrl = "https://github.com/ferdinandimas/desktop-tools";
+
         /// <summary>The version from the repo's VERSION file, e.g. "1.0.0".</summary>
         public static string Version { get; } = ReadVersion();
 

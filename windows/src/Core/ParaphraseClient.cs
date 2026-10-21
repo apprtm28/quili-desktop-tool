@@ -15,12 +15,16 @@ namespace ParaphraseTool.Core
         public static string NormalizeServerUrl(string? url)
         {
             var u = (url ?? "").Trim().TrimEnd('/');
-            const string endpoint = "/api/paraphrase";
-            if (u.EndsWith(endpoint, StringComparison.OrdinalIgnoreCase)) u = u[..^endpoint.Length].TrimEnd('/');
+            foreach (var endpoint in new[] { "/api/paraphrase", "/api/translate" })
+                if (u.EndsWith(endpoint, StringComparison.OrdinalIgnoreCase))
+                    u = u[..^endpoint.Length].TrimEnd('/');
             return u;
         }
 
-        public static async Task<string> ParaphraseAsync(string text, Settings settings, CancellationToken ct = default)
+        public static Task<string> ParaphraseAsync(string text, Settings settings, CancellationToken ct = default) =>
+            RunAsync(text, settings, TextAction.Paraphrase, ct);
+
+        public static async Task<string> RunAsync(string text, Settings settings, TextAction action, CancellationToken ct = default)
         {
             var apiKey = settings.ApiKey;
             var serverUrl = NormalizeServerUrl(settings.ServerUrl);
@@ -28,12 +32,15 @@ namespace ParaphraseTool.Core
                 throw new InvalidOperationException("Server URL or API key not set. Open Settings from the tray icon.");
 
             text = TextHygiene.StripLoneSurrogates(text);
-            DebugLog.Write($"paraphrase request: POST {serverUrl}/api/paraphrase ({TextHygiene.Describe(text)})");
+            DebugLog.Write($"{action} request: POST {serverUrl}{action.Path()} ({TextHygiene.Describe(text)})");
             // The default encoder escapes every non-ASCII character (\uD83D\uDE00), so emoji cannot be
             // mangled in transit; the body is also sent explicitly as UTF-8.
-            var body = JsonSerializer.Serialize(new { text, style = TextHygiene.StripLoneSurrogates(settings.EffectiveStyle) });
+            // Paraphrase carries the user's instruction; translate always targets English.
+            var body = action == TextAction.TranslateToEnglish
+                ? JsonSerializer.Serialize(new { text, target_language = "English" })
+                : JsonSerializer.Serialize(new { text, style = TextHygiene.StripLoneSurrogates(settings.EffectiveStyle) });
 
-            using var req = new HttpRequestMessage(HttpMethod.Post, serverUrl + "/api/paraphrase")
+            using var req = new HttpRequestMessage(HttpMethod.Post, serverUrl + action.Path())
             {
                 Content = new StringContent(body, new UTF8Encoding(false), "application/json"),
             };
@@ -43,7 +50,7 @@ namespace ParaphraseTool.Core
             // Decode as UTF-8 ourselves rather than trusting a missing/incorrect charset header.
             var json = Encoding.UTF8.GetString(await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false));
 
-            DebugLog.Write($"paraphrase response: HTTP {(int)resp.StatusCode}");
+            DebugLog.Write($"{action} response: HTTP {(int)resp.StatusCode}");
             if (!resp.IsSuccessStatusCode)
             {
                 string msg = json;
@@ -53,7 +60,7 @@ namespace ParaphraseTool.Core
                     msg = detail.ValueKind == JsonValueKind.String ? detail.GetString() ?? json : detail.ToString();
                 }
                 catch (Exception) { }
-                throw new InvalidOperationException($"Paraphrase server error {(int)resp.StatusCode}: {msg}");
+                throw new InvalidOperationException($"{action.Verb()} server error {(int)resp.StatusCode}: {msg}");
             }
 
             using var doc = JsonDocument.Parse(json);
@@ -61,7 +68,7 @@ namespace ParaphraseTool.Core
             if (string.IsNullOrWhiteSpace(content))
                 throw new InvalidOperationException("Paraphrase server returned an empty response.");
             content = TextHygiene.StripLoneSurrogates(content).Trim();
-            DebugLog.Write($"paraphrase result: {TextHygiene.Describe(content)}");
+            DebugLog.Write($"{action} result: {TextHygiene.Describe(content)}");
             return content;
         }
     }

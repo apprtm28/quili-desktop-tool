@@ -15,7 +15,13 @@
                    Text="Sent to the AI as the command for every paraphrase. Examples: Make it more formal · Shorter and punchier · Friendly and casual · Translate to English · Make it 3 bullet points" />
         <TextBox x:Name="StyleBox" Margin="0,6,0,12" Height="60" TextWrapping="Wrap" AcceptsReturn="True" MaxLength="1000" />
 
-        <CheckBox x:Name="StartupBox" Content="Start with Windows" Margin="0,0,0,16" />
+        <CheckBox x:Name="StartupBox" Content="Start with Windows" Margin="0,0,0,12" />
+
+        <TextBlock Margin="0,0,0,16">
+            <Run Text="Repository: " Foreground="Gray" />
+            <Hyperlink x:Name="RepoLink" NavigateUri="https://github.com/ferdinandimas/desktop-tools"
+                       RequestNavigate="RepoLink_RequestNavigate">github.com/ferdinandimas/desktop-tools</Hyperlink>
+        </TextBlock>
 
         <Grid>
             <TextBlock x:Name="VersionText" Foreground="Gray" VerticalAlignment="Center" />

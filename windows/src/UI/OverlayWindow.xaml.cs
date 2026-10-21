@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using ParaphraseTool.Core;
 using ParaphraseTool.Platform;
@@ -15,7 +16,7 @@ namespace ParaphraseTool.UI
     /// </summary>
     public partial class OverlayWindow : Window
     {
-        const double CollapsedDip = 28, ExpandedDip = 66, MarginDip = 6;
+        const double CollapsedDip = 28, ExpandedDip = 102, MarginDip = 6;
         const double StepPerTick = 0.2;
 
         readonly IntPtr _hwnd;
@@ -26,7 +27,7 @@ namespace ParaphraseTool.UI
         double _expansion;      // 0 = collapsed, 1 = fully expanded
         bool _hovered;
 
-        public event Action? Clicked;
+        public event Action<TextAction>? ActionRequested;
         public bool IsBusy { get; private set; }
 
         public OverlayWindow()
@@ -42,7 +43,10 @@ namespace ParaphraseTool.UI
         {
             IsBusy = busy;
             Robot.Visibility = busy ? Visibility.Collapsed : Visibility.Visible;
-            BusyText.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+            Spinner.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+            Spin.BeginAnimation(RotateTransform.AngleProperty, busy
+                ? new DoubleAnimation(0, 360, TimeSpan.FromSeconds(0.9)) { RepeatBehavior = RepeatBehavior.Forever }
+                : null);
             Chip.Cursor = busy ? Cursors.Wait : Cursors.Hand;
             _animation.Start(); // collapse while busy, re-expand if still hovered afterwards
         }
@@ -86,6 +90,7 @@ namespace ParaphraseTool.UI
 
             Pill.Opacity = _expansion;
             ParaphraseAction.Opacity = _expansion;
+            TranslateAction.Opacity = _expansion;
             Native.SetWindowPos(_hwnd, Native.HWND_TOPMOST, _x - (width - _size), _y, width, _size,
                 Native.SWP_NOACTIVATE | Native.SWP_SHOWWINDOW);
         }
@@ -117,13 +122,14 @@ namespace ParaphraseTool.UI
             _animation.Start();
         }
 
-        // Both the round button and the Paraphrase action run the paraphrase (the only action for now).
-        void Chip_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => Trigger();
-        void Action_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => Trigger();
+        // The round button ("Text Tool") and the Paraphrase action both paraphrase; EN translates to English.
+        void Chip_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => Trigger(TextAction.Paraphrase);
+        void Action_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => Trigger(TextAction.Paraphrase);
+        void Translate_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => Trigger(TextAction.TranslateToEnglish);
 
-        void Trigger()
+        void Trigger(TextAction action)
         {
-            if (!IsBusy) Clicked?.Invoke();
+            if (!IsBusy) ActionRequested?.Invoke(action);
         }
     }
 }

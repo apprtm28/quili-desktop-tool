@@ -12,17 +12,50 @@ private enum Palette {
 }
 
 /// Draws the collapsed round button, and — as `expansion` goes 0 → 1 — a white pill growing to its left
-/// with the action buttons (only Paraphrase for now).
+/// with the action buttons (Translate to English, Paraphrase).
 private final class OverlayView: NSView {
-    var onClick: (() -> Void)?
+    static let actionWidth: CGFloat = 36
+    var onAction: ((TextAction) -> Void)?
     var onHover: ((Bool) -> Void)?
-    var busy = false { didSet { needsDisplay = true } }
+    var busy = false {
+        didSet {
+            needsDisplay = true
+            if busy { startSpinning() } else { spinTimer?.invalidate(); spinTimer = nil }
+        }
+    }
+    private var spinAngle: CGFloat = 90
+    private var spinTimer: Timer?
     var expansion: CGFloat = 0 { didSet { needsDisplay = true } }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    // The round button and the Paraphrase action both run the paraphrase.
-    override func mouseUp(with event: NSEvent) { if !busy { onClick?() } }
+    // The round button ("Text Tool") and the Paraphrase action both paraphrase; EN translates to English.
+    override func mouseUp(with event: NSEvent) {
+        guard !busy else { return }
+        onAction?(action(at: convert(event.locationInWindow, from: nil)))
+    }
+
+    private var paraphraseMinX: CGFloat { bounds.width - bounds.height - Self.actionWidth }
+
+    private func action(at point: NSPoint) -> TextAction {
+        let translateMinX = paraphraseMinX - Self.actionWidth
+        if expansion > 0.5, point.x >= translateMinX, point.x < paraphraseMinX { return .translateToEnglish }
+        return .paraphrase
+    }
+
+    // One tooltip over the whole view whose text depends on which part is hovered.
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        registerToolTip()
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        registerToolTip()
+    }
+    private func registerToolTip() {
+        removeAllToolTips()
+        addToolTip(bounds, owner: self, userData: nil)
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -44,10 +77,19 @@ private final class OverlayView: NSView {
             pill.lineWidth = 1
             pill.stroke()
 
-            let action = NSRect(x: 0, y: 0, width: bounds.width - h, height: h)
+            // Actions are anchored to the round button, so they slide out with the pill.
+            let paraphrase = NSRect(x: paraphraseMinX, y: 0, width: Self.actionWidth, height: h)
             Palette.green.withAlphaComponent(expansion).setFill()
-            Self.star(center: NSPoint(x: action.midX - 1, y: action.midY - 1), radius: 7).fill()
-            Self.star(center: NSPoint(x: action.midX + 6, y: action.midY + 6), radius: 3).fill()
+            Self.star(center: NSPoint(x: paraphrase.midX - 1, y: paraphrase.midY - 1), radius: 7).fill()
+            Self.star(center: NSPoint(x: paraphrase.midX + 6, y: paraphrase.midY + 6), radius: 3).fill()
+
+            let translate = paraphrase.offsetBy(dx: -Self.actionWidth, dy: 0)
+            let label = NSAttributedString(string: "EN", attributes: [
+                .font: NSFont.boldSystemFont(ofSize: 12),
+                .foregroundColor: Palette.green.withAlphaComponent(expansion),
+            ])
+            let size = label.size()
+            label.draw(at: NSPoint(x: translate.midX - size.width / 2, y: translate.midY - size.height / 2))
         }
 
         let circle = NSRect(x: bounds.width - h, y: 0, width: h, height: h).insetBy(dx: 1, dy: 1)
@@ -55,12 +97,34 @@ private final class OverlayView: NSView {
         NSBezierPath(ovalIn: circle).fill()
 
         if busy {
-            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.boldSystemFont(ofSize: 15), .foregroundColor: Palette.dark]
-            let text = "…" as NSString
-            let size = text.size(withAttributes: attrs)
-            text.draw(at: NSPoint(x: circle.midX - size.width / 2, y: circle.midY - size.height / 2), withAttributes: attrs)
+            let spinner = circle.insetBy(dx: 6, dy: 6)
+            let center = NSPoint(x: spinner.midX, y: spinner.midY)
+            let radius = spinner.width / 2
+
+            let track = NSBezierPath(ovalIn: spinner)
+            track.lineWidth = 2
+            Palette.dark.withAlphaComponent(0.2).setStroke()
+            track.stroke()
+
+            let arc = NSBezierPath()
+            arc.appendArc(withCenter: center, radius: radius, startAngle: spinAngle, endAngle: spinAngle + 100, clockwise: false)
+            arc.lineWidth = 2
+            arc.lineCapStyle = .round
+            Palette.dark.setStroke()
+            arc.stroke()
         } else {
             Self.drawRobot(in: circle.insetBy(dx: 5, dy: 5))
+        }
+    }
+
+    private func startSpinning() {
+        guard spinTimer == nil else { return }
+        spinTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.spinAngle -= 7 // clockwise
+                self.needsDisplay = true
+            }
         }
     }
 
@@ -97,9 +161,19 @@ private final class OverlayView: NSView {
     }
 }
 
+extension OverlayView: NSViewToolTipOwner {
+    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint,
+              userData data: UnsafeMutableRawPointer?) -> String {
+        switch action(at: point) {
+        case .translateToEnglish: return "Translate to English"
+        case .paraphrase: return point.x < bounds.width - bounds.height ? "Paraphrase" : "Text Tool"
+        }
+    }
+}
+
 @MainActor
 final class OverlayWindow {
-    private static let size: CGFloat = 28, expandedWidth: CGFloat = 66, margin: CGFloat = 6
+    private static let size: CGFloat = 28, expandedWidth: CGFloat = 102, margin: CGFloat = 6
     private static let stepPerTick: CGFloat = 0.2
 
     private let panel: OverlayPanel
@@ -111,7 +185,7 @@ final class OverlayWindow {
     private var expansion: CGFloat = 0
     private var hovered = false
 
-    var onClick: (() -> Void)? { didSet { view.onClick = onClick } }
+    var onAction: ((TextAction) -> Void)? { didSet { view.onAction = onAction } }
     private(set) var isBusy = false
 
     init() {

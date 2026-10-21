@@ -7,6 +7,8 @@ Windows tray app. When you focus a text field in any app (Chrome, Slack desktop,
 - **Read:** UIA `TextPattern`/`ValuePattern`, falling back to Ctrl+A / Ctrl+C.
 - **Write:** clipboard + Ctrl+A / Ctrl+V (works in Chromium/Electron editors). Your previous *text* clipboard is restored.
 - **Paraphrase:** `POST {server}/api/paraphrase` with an `X-API-Key` header; the server detects the language and replies in it. Set the server URL and API key in Settings. The API key is stored encrypted with Windows DPAPI in `%APPDATA%\ParaphraseTool\settings.json`.
+- **Buttons:** the green round button (tooltip **Text Tool**) paraphrases on a click. Hovering it expands a pill with two actions: **EN** translates the text into natural, paraphrased English (`POST {server}/api/translate`, whatever the original language) and the sparkle **Paraphrase**, which follows the **Paraphrase instruction** from Settings (e.g. "make it formal", "shorter", "translate to Indonesian").
+- Settings also shows a link to this repository.
 - Text is only sent when you click the button. Password fields are ignored.
 
 ## Project layout

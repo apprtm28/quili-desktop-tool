@@ -5,12 +5,18 @@
         Topmost="True" ShowInTaskbar="False" ShowActivated="False" ResizeMode="NoResize"
         Focusable="False" Width="28" Height="28">
     <!-- Collapsed: just the green round button on the right. Hovered: a white pill grows to the left
-         with the action buttons (only Paraphrase for now) in front of the round button. -->
+         with the action buttons (Translate to English, Paraphrase) in front of the round button. -->
     <Grid x:Name="Root" Background="Transparent" MouseEnter="Root_MouseEnter" MouseLeave="Root_MouseLeave">
         <Border x:Name="Pill" Background="White" BorderBrush="#26000000" BorderThickness="1"
                 CornerRadius="14" Opacity="0" />
 
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+            <Border x:Name="TranslateAction" Width="36" Height="26" Opacity="0" Background="Transparent"
+                    Cursor="Hand" ToolTip="Translate to English" MouseLeftButtonUp="Translate_MouseLeftButtonUp">
+                <TextBlock Text="EN" Foreground="#3DBE4A" FontSize="12" FontWeight="Bold"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+
             <Border x:Name="ParaphraseAction" Width="36" Height="26" Opacity="0" Background="Transparent"
                     Cursor="Hand" ToolTip="Paraphrase" MouseLeftButtonUp="Action_MouseLeftButtonUp">
                 <Viewbox Width="18" Height="18">
@@ -24,7 +30,7 @@
             </Border>
 
             <Border x:Name="Chip" Width="26" Height="26" Margin="1" CornerRadius="13" Background="#3DBE4A"
-                    Cursor="Hand" ToolTip="Paraphrase text" MouseLeftButtonUp="Chip_MouseLeftButtonUp">
+                    Cursor="Hand" ToolTip="Text Tool" MouseLeftButtonUp="Chip_MouseLeftButtonUp">
                 <Grid>
                     <Viewbox x:Name="Robot" Width="16" Height="16">
                         <Canvas Width="24" Height="24">
@@ -38,8 +44,17 @@
                             <Line X1="9.5" Y1="16.8" X2="14.5" Y2="16.8" Stroke="#3DBE4A" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
                         </Canvas>
                     </Viewbox>
-                    <TextBlock x:Name="BusyText" Text="…" Visibility="Collapsed" Foreground="#1F2A24" FontSize="15"
-                               FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    <!-- Busy spinner: a quarter arc spun by OverlayWindow.SetBusy. -->
+                    <Grid x:Name="Spinner" Width="14" Height="14" Visibility="Collapsed"
+                          HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Ellipse Stroke="#331F2A24" StrokeThickness="2" />
+                        <Ellipse Stroke="#1F2A24" StrokeThickness="2" StrokeDashArray="5.5 16.5" StrokeDashCap="Round"
+                                 RenderTransformOrigin="0.5,0.5">
+                            <Ellipse.RenderTransform>
+                                <RotateTransform x:Name="Spin" Angle="0" />
+                            </Ellipse.RenderTransform>
+                        </Ellipse>
+                    </Grid>
                 </Grid>
             </Border>
         </StackPanel>

@@ -27,7 +27,7 @@ namespace ParaphraseTool
             _settings = settings;
             _dispatcher = dispatcher;
             _notify = notify;
-            _overlay.Clicked += () => _ = ParaphraseAsync();
+            _overlay.ActionRequested += action => _ = RunAsync(action);
             _tracker.TargetChanged += t => _dispatcher.BeginInvoke(() => OnTargetChanged(t));
         }
 
@@ -54,10 +54,10 @@ namespace ParaphraseTool
             else _overlay.ShowAt(target.Bounds);
         }
 
-        async Task ParaphraseAsync()
+        async Task RunAsync(TextAction action)
         {
             var target = _current;
-            DebugLog.Write($"button clicked (target={(target == null ? "none" : "set")}, busy={_overlay.IsBusy})");
+            DebugLog.Write($"{action} clicked (target={(target == null ? "none" : "set")}, busy={_overlay.IsBusy})");
             if (target == null || _overlay.IsBusy) return;
 
             _overlay.SetBusy(true);
@@ -68,11 +68,11 @@ namespace ParaphraseTool
                 DebugLog.Write($"read {field.Text.Length} chars from field");
                 if (string.IsNullOrWhiteSpace(field.Text))
                 {
-                    _notify("Nothing to paraphrase", "The text field is empty.", NoticeLevel.Info);
+                    _notify($"Nothing to {action.Verb().ToLowerInvariant()}", "The text field is empty.", NoticeLevel.Info);
                     return;
                 }
 
-                var result = await ParaphraseClient.ParaphraseAsync(field.Text, _settings);
+                var result = await ParaphraseClient.RunAsync(field.Text, _settings, action);
 
                 bool focused = FocusTracker.StillFocused(target.Element), front = FocusTracker.IsForeground(target.Element);
                 if (!focused || !front)
@@ -84,7 +84,7 @@ namespace ParaphraseTool
                     {
                         DebugLog.Write("could not restore focus; result left on the clipboard");
                         TextAccess.TrySetClipboard(result);
-                        _notify("Focus changed", "Paraphrased text was copied to the clipboard instead.", NoticeLevel.Info);
+                        _notify("Focus changed", $"The {action.Verb().ToLowerInvariant()}d text was copied to the clipboard instead.", NoticeLevel.Info);
                         return;
                     }
                 }
@@ -94,8 +94,8 @@ namespace ParaphraseTool
             }
             catch (Exception ex)
             {
-                DebugLog.Write($"paraphrase failed: {ex.GetType().Name}: {ex.Message}");
-                _notify("Paraphrase failed", ex.Message, NoticeLevel.Error);
+                DebugLog.Write($"{action} failed: {ex.GetType().Name}: {ex.Message}");
+                _notify($"{action.Verb()} failed", ex.Message, NoticeLevel.Error);
             }
             finally
             {

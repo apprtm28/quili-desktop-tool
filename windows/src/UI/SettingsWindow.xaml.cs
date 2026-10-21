@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Windows;
+using System.Windows.Navigation;
 using ParaphraseTool.Core;
 
 namespace ParaphraseTool.UI
@@ -16,6 +18,12 @@ namespace ParaphraseTool.UI
             ServerBox.Text = ParaphraseClient.NormalizeServerUrl(settings.ServerUrl);
             StyleBox.Text = settings.Style;
             StartupBox.IsChecked = settings.RunAtStartup;
+        }
+
+        void RepoLink_RequestNavigate(object sender, RequestNavigateEventArgs e)
+        {
+            Process.Start(new ProcessStartInfo(AppInfo.RepoUrl) { UseShellExecute = true });
+            e.Handled = true;
         }
 
         void Save_Click(object sender, RoutedEventArgs e)

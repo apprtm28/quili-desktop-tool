@@ -11,7 +11,7 @@ final class ParaphraseController {
 
     init(settings: Settings) {
         self.settings = settings
-        overlay.onClick = { [weak self] in Task { await self?.paraphrase() } }
+        overlay.onAction = { [weak self] action in Task { await self?.run(action) } }
         tracker.onChange = { [weak self] target in self?.targetChanged(target) }
     }
 
@@ -32,7 +32,7 @@ final class ParaphraseController {
         if let target { overlay.show(at: target.frame) } else { overlay.hide() }
     }
 
-    private func paraphrase() async {
+    private func run(_ action: TextAction) async {
         guard let target = current, !overlay.isBusy else { return }
         overlay.setBusy(true)
         defer { overlay.setBusy(false) }
@@ -41,22 +41,22 @@ final class ParaphraseController {
             let field = await TextAccess.read(target.element)
             DebugLog.write("read \(field.text.count) chars (selection=\(field.isSelection))")
             guard !field.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                Notifier.show("Nothing to paraphrase", "The text field is empty.")
+                Notifier.show("Nothing to \(action.verb.lowercased())", "The text field is empty.")
                 return
             }
 
-            let result = try await ParaphraseClient.paraphrase(field.text, settings: settings)
+            let result = try await ParaphraseClient.run(field.text, settings: settings, action: action)
 
             guard FocusTracker.stillFocused(target.element) else {
                 TextAccess.setPasteboard(result)
-                Notifier.show("Focus changed", "Paraphrased text was copied to the clipboard instead.")
+                Notifier.show("Focus changed", "The \(action.verb.lowercased())d text was copied to the clipboard instead.")
                 return
             }
             try await TextAccess.replace(field, in: target.element, with: result)
             DebugLog.write("field replaced")
         } catch {
-            DebugLog.write("paraphrase failed: \(error.localizedDescription)")
-            Notifier.show("Paraphrase failed", error.localizedDescription)
+            DebugLog.write("\(action) failed: \(error.localizedDescription)")
+            Notifier.show("\(action.verb) failed", error.localizedDescription)
         }
     }
 }
