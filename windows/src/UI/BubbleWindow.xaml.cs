@@ -13,7 +13,7 @@ namespace Quili.UI
     public partial class BubbleWindow : Window
     {
         const int WS_EX_TRANSPARENT = 0x20;
-        const double GapDip = 6;
+        const double GapDip = 6, MaxHeightDip = 150, TallMaxHeightDip = 340;
 
         readonly IntPtr _hwnd;
 
@@ -26,12 +26,17 @@ namespace Quili.UI
                 ex | Native.WS_EX_NOACTIVATE | Native.WS_EX_TOOLWINDOW | WS_EX_TRANSPARENT);
         }
 
-        /// <summary>Shows <paramref name="text"/> above <paramref name="anchor"/> (screen pixels), or below it when there is no room.</summary>
-        public void ShowText(string text, System.Drawing.Rectangle anchor)
+        /// <summary>
+        /// Shows <paramref name="text"/> above <paramref name="anchor"/> (screen pixels), or below it when there is no room.
+        /// A <paramref name="tall"/> bubble (a summary) is taller and reads from its first line instead of following the newest ones.
+        /// </summary>
+        public void ShowText(string text, System.Drawing.Rectangle anchor, bool tall = false)
         {
             if (anchor.IsEmpty) return;
+            Scroller.MaxHeight = tall ? TallMaxHeightDip : MaxHeightDip;
             Body.Text = text;
-            Scroller.ScrollToBottom(); // long text: keep the newest lines in view
+            if (tall) Scroller.ScrollToTop();
+            else Scroller.ScrollToBottom(); // long text: keep the newest lines in view
 
             if (!IsVisible) Show();
 

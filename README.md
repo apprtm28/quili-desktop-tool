@@ -23,13 +23,13 @@ windows/                  WPF / .NET 8 app
     App.xaml(.cs)         startup, single instance, wiring
     ParaphraseController  focus → overlay button → read → paraphrase → replace
     Core/                 Settings, ParaphraseClient (server API), DebugLog
-    Platform/             FocusTracker + TextAccess (UI Automation, clipboard), Native, StartupRegistration
+    Platform/             FocusTracker + TextAccess + ThreadReader (UI Automation, clipboard), Native, StartupRegistration
     UI/                   OverlayWindow (the ✦ button), SettingsWindow, TrayIcon
 mac/                      native Swift menu-bar app, same structure
   build.sh, Package.swift, Info.plist
   Sources/Quili/
     App/                  main, AppDelegate (menus), ParaphraseController
-    Accessibility/        AX helpers, FocusTracker, TextAccess
+    Accessibility/        AX helpers, FocusTracker, TextAccess, ThreadReader
     Services/             Settings, ParaphraseClient, DebugLog, Notifier
     UI/                   OverlayWindow, SettingsWindow
 ```
@@ -59,6 +59,13 @@ git tag v$(cat VERSION) && git push origin v$(cat VERSION)
 The workflow (`.github/workflows/release.yml`) refuses a tag that doesn't match `VERSION`. It can also be run by hand from the Actions tab to just build the artifacts.
 
 The builds aren't code-signed, so first launch shows a warning: on Windows choose *More info → Run anyway* (SmartScreen); on macOS right-click the app and choose *Open*, or run `xattr -dr com.apple.quarantine Quili.app`.
+
+## Summarize a Slack thread
+Open a thread in the Slack desktop app's side pane, then choose **Summarize Slack thread** from the tray icon (Windows) or menu-bar icon (macOS). Quili reads the thread text from Slack's window through the accessibility API (no Slack API, token or admin approval), sends it to `POST /api/summarize-thread` on your server, shows the summary in a bubble for 25 seconds and copies it to the clipboard. Nothing is written to Slack.
+
+- Only what the window has rendered is read, so a very long thread may need scrolling to the top first; the oldest lines are dropped if the thread exceeds ~38,000 characters.
+- Slack's accessibility layout isn't documented and may change between releases. If it says "No thread found", the debug log (`debug.log`) records how many lines were read and the shape of the window (control types only, never message text).
+- Slack must be exposing its accessibility tree: on Windows start it with `--force-renderer-accessibility` if the first attempt finds nothing.
 
 ## Notes / limitations
 - Chrome and Electron expose UI Automation only when an accessibility client is detected; the tool triggers this automatically, but the first focus after launching Chrome/Slack may need a click or two. If Slack doesn't show the button, start it with `--force-renderer-accessibility`.

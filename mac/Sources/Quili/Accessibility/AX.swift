@@ -11,6 +11,15 @@ enum AX {
         attr(el, name) as? String
     }
 
+    static func children(_ el: AXUIElement) -> [AXUIElement] {
+        (attr(el, kAXChildrenAttribute) as? [AXUIElement]) ?? []
+    }
+
+    static func parent(_ el: AXUIElement) -> AXUIElement? {
+        guard let v = attr(el, kAXParentAttribute) else { return nil }
+        return (v as! AXUIElement)
+    }
+
     static func pid(_ el: AXUIElement) -> pid_t {
         var pid: pid_t = 0
         AXUIElementGetPid(el, &pid)

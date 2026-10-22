@@ -19,7 +19,7 @@ enum ParaphraseClient {
     static func normalize(_ url: String) -> String {
         var u = url.trimmingCharacters(in: .whitespacesAndNewlines)
         while u.hasSuffix("/") { u.removeLast() }
-        for endpoint in ["/api/paraphrase", "/api/translate"] where u.lowercased().hasSuffix(endpoint) {
+        for endpoint in ["/api/paraphrase", "/api/translate", "/api/summarize-thread"] where u.lowercased().hasSuffix(endpoint) {
             u = String(u.dropLast(endpoint.count))
             while u.hasSuffix("/") { u.removeLast() }
         }
@@ -45,10 +45,13 @@ enum ParaphraseClient {
         req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
         req.setValue("text/event-stream, application/json", forHTTPHeaderField: "Accept")
-        // Paraphrase carries the user's instruction; translate always targets English.
-        let body: [String: Any] = action == .translateToEnglish
-            ? ["text": text, "target_language": "English", "stream": true]
-            : ["text": text, "style": settings.effectiveStyle, "stream": true]
+        // Paraphrase carries the user's instruction; translate always targets English; a summary has no instruction.
+        let body: [String: Any]
+        switch action {
+        case .translateToEnglish: body = ["text": text, "target_language": "English", "stream": true]
+        case .summarizeThread: body = ["text": text, "stream": true]
+        case .paraphrase: body = ["text": text, "style": settings.effectiveStyle, "stream": true]
+        }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         DebugLog.write("\(action) request: POST \(url) (\(TextHygiene.describe(text)))")

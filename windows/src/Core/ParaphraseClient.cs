@@ -23,7 +23,7 @@ namespace Quili.Core
         public static string NormalizeServerUrl(string? url)
         {
             var u = (url ?? "").Trim().TrimEnd('/');
-            foreach (var endpoint in new[] { "/api/paraphrase", "/api/translate" })
+            foreach (var endpoint in new[] { "/api/paraphrase", "/api/translate", "/api/summarize-thread" })
                 if (u.EndsWith(endpoint, StringComparison.OrdinalIgnoreCase))
                     u = u[..^endpoint.Length].TrimEnd('/');
             return u;
@@ -52,10 +52,13 @@ namespace Quili.Core
             DebugLog.Write($"{action} request: POST {serverUrl}{action.Path()} ({TextHygiene.Describe(text)})");
             // The default encoder escapes every non-ASCII character (\uD83D\uDE00), so emoji cannot be
             // mangled in transit; the body is also sent explicitly as UTF-8.
-            // Paraphrase carries the user's instruction; translate always targets English.
-            var body = action == TextAction.TranslateToEnglish
-                ? JsonSerializer.Serialize(new { text, target_language = "English", stream = true })
-                : JsonSerializer.Serialize(new { text, style = TextHygiene.StripLoneSurrogates(settings.EffectiveStyle), stream = true });
+            // Paraphrase carries the user's instruction; translate always targets English; a summary has no instruction.
+            var body = action switch
+            {
+                TextAction.TranslateToEnglish => JsonSerializer.Serialize(new { text, target_language = "English", stream = true }),
+                TextAction.SummarizeThread => JsonSerializer.Serialize(new { text, stream = true }),
+                _ => JsonSerializer.Serialize(new { text, style = TextHygiene.StripLoneSurrogates(settings.EffectiveStyle), stream = true }),
+            };
 
             HttpRequestMessage NewRequest()
             {

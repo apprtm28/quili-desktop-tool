@@ -21,7 +21,7 @@ namespace Quili
 
             _settings = Settings.Load();
 
-            _tray = new TrayIcon(ShowSettings, paused => _controller!.Paused = paused, Shutdown);
+            _tray = new TrayIcon(() => _controller!.SummarizeThread(), ShowSettings, paused => _controller!.Paused = paused, Shutdown);
             _controller = new ParaphraseController(_settings, Dispatcher, _tray.Notify);
             _controller.SettingsRequested += ShowSettings;
             _controller.Start();

@@ -10,6 +10,7 @@ final class ParaphraseController {
     private let bubble = BubbleWindow()
     private var current: TextTarget?
     private var request: Task<Void, Never>?
+    private var hideSummaryTimer: Task<Void, Never>? // auto-hides the summary bubble
     private var previewing = false // late streamed updates must not re-show the bubble after the request ended
     private var writing = false // once the field is being written, cancelling would leave it half-replaced
 
@@ -48,6 +49,64 @@ final class ParaphraseController {
         let sameField = target != nil && current != nil && CFEqual(current!.element, target!.element)
         current = target
         if let target { overlay.show(at: target.frame, sameField: sameField) } else { overlay.hide() }
+    }
+
+    /// Menu-bar action: reads the Slack thread open in `app`'s window and shows its summary under `anchor`
+    /// (the menu-bar item, Cocoa screen coordinates). Never writes to Slack; the summary is also copied.
+    func summarizeThread(in app: NSRunningApplication?, below anchor: NSRect) {
+        guard request == nil, !overlay.isBusy else { return }
+        request = Task { await self.runSummary(in: app, below: anchor) }
+    }
+
+    private func runSummary(in app: NSRunningApplication?, below anchor: NSRect) async {
+        defer { request = nil }
+        let action = TextAction.summarizeThread
+        guard AXIsProcessTrusted() else {
+            Notifier.show("Accessibility permission needed",
+                          "Allow Quili in System Settings → Privacy & Security → Accessibility.")
+            return
+        }
+        guard let app, app.bundleIdentifier == ThreadReader.slackBundleId else {
+            Notifier.show("Open a Slack thread first", "Switch to Slack, open the thread, then choose Summarize Slack thread.")
+            return
+        }
+        DebugLog.write("summarize clicked (Slack pid \(app.processIdentifier))")
+        previewing = true
+        defer { previewing = false }
+        hideSummaryTimer?.cancel()
+        bubble.show("Reading the thread…", above: anchor, tall: true)
+
+        do {
+            let pid = app.processIdentifier
+            let thread = await Task.detached { ThreadReader.read(pid: pid) }.value
+            guard let thread, thread.text.trimmingCharacters(in: .whitespacesAndNewlines).count > 20 else {
+                bubble.hide()
+                Notifier.show("No thread found", "Open the thread in Slack's side pane (click its replies link) and try again.")
+                return
+            }
+            DebugLog.write("read \(thread.text.count) chars from the thread\(thread.truncated ? " (oldest messages dropped)" : "")")
+
+            let result = try await ParaphraseClient.run(thread.text, settings: settings, action: action) { [weak self] partial in
+                guard let self, self.previewing else { return }
+                self.bubble.show(partial, above: anchor, tall: true)
+            }
+            TextAccess.setPasteboard(result)
+            bubble.show(result, above: anchor, tall: true)
+            Notifier.show("Thread summarized", "The summary was copied to the clipboard.")
+            // The bubble is click-through, so it goes away on its own.
+            hideSummaryTimer = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 25_000_000_000)
+                if !Task.isCancelled { self?.bubble.hide() }
+            }
+        } catch is CancellationError {
+            bubble.hide()
+        } catch let error as URLError where error.code == .cancelled {
+            bubble.hide()
+        } catch {
+            bubble.hide()
+            DebugLog.write("\(action) failed: \(error.localizedDescription)")
+            Notifier.show("\(action.verb) failed", error.localizedDescription)
+        }
     }
 
     private func run(_ action: TextAction) async {

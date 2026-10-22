@@ -26,6 +26,7 @@ One app, implemented twice: **Windows** (`windows/`, C# / WPF, .NET 8) and **mac
 | Debug log, version info | `Core/DebugLog.cs`, `Core/AppInfo.cs` | `Services/DebugLog.swift`, `Services/AppInfo.swift` |
 | Field detection | `Platform/FocusTracker.cs` | `Accessibility/FocusTracker.swift`, `Accessibility/AX.swift` |
 | Read / replace text | `Platform/TextAccess.cs`, `Platform/Native.cs` | `Accessibility/TextAccess.swift` |
+| Read a Slack thread (summarize action) | `Platform/ThreadReader.cs`, `ParaphraseController.SummarizeThread` | `Accessibility/ThreadReader.swift`, `ParaphraseController.summarizeThread` |
 | Visible field-edge measurement | `Platform/FieldEdge.cs` | `Accessibility/FieldEdge.swift` |
 | Overlay button and pill | `UI/OverlayWindow.xaml(.cs)` | `UI/OverlayWindow.swift` |
 | Live preview bubble (streamed text) | `UI/BubbleWindow.xaml(.cs)` | `UI/BubbleWindow.swift` |
@@ -51,6 +52,7 @@ Keep this list current. Anything not listed here is expected to match.
 - Streaming: both clients send `"stream": true` and read server-sent events (`delta` = text so far, each replacing the previous; then `done` or `error`), showing the text in the click-through bubble above the button (below when there is no room) and only replacing the field once `done` arrives. Windows reads the stream with `StreamReader`, macOS with `URLSession.bytes(...).lines` (which skips blank lines, so an event is handled on its `data:` line). A server that answers plain JSON still works.
 - Overlay cursor: the macOS overlay always shows the regular arrow pointer (requested). Windows still shows a hand over the actions and a size-all cursor on the green button.
 - One-time migration from the app's former name "Paraphrase Tool": Windows copies `%APPDATA%\ParaphraseTool\settings.json` and moves the old `Run` entry; macOS copies the old `UserDefaults` domain `com.ferdibot.paraphrasetool` and the old Keychain item (macOS asks once to allow reading it). These legacy names are the only places the old name should remain.
+- Summarize Slack thread (tray / menu-bar item, `/api/summarize-thread`): both read the open thread pane of the Slack desktop app through the accessibility tree (UIA vs `AXUIElement`), send it to the server, show the summary in a tall, top-aligned, click-through bubble for 25 s and copy it to the clipboard; Slack is never written to. Differences: macOS shows the bubble under the menu-bar item and checks the Accessibility permission first; Windows shows it above the tray (the notification-area icon has no readable bounds, so the bottom-right corner of the work area is used) and remembers the last non-shell foreground window in `FocusTracker` because the tray click steals the foreground (macOS keeps it in `AppDelegate` via `didActivateApplicationNotification`). Slack is found by bundle id `com.tinyspeck.slackmacgap` vs process name `slack`. The reader is heuristic (Slack's tree is undocumented) and logs only counts and roles, never message text.
 - Log location: `%APPDATA%\Quili\debug.log` vs `~/Library/Logs/Quili/debug.log`.
 
 ## Practical notes

@@ -7,7 +7,7 @@ private final class BubblePanel: NSPanel {
 
 /// The card's content: white rounded rect with the text, showing the newest lines when it is too long.
 private final class BubbleView: NSView {
-    static let maxTextWidth: CGFloat = 320, maxTextHeight: CGFloat = 150
+    static let maxTextWidth: CGFloat = 320, maxTextHeight: CGFloat = 150, tallTextHeight: CGFloat = 340
     static let padX: CGFloat = 12, padY: CGFloat = 9
     private static let attributes: [NSAttributedString.Key: Any] = {
         let style = NSMutableParagraphStyle()
@@ -17,6 +17,8 @@ private final class BubbleView: NSView {
     }()
 
     var text = "" { didSet { needsDisplay = true } }
+    /// A tall bubble (a summary) reads from its first line instead of following the newest ones.
+    var tall = false { didSet { needsDisplay = true } }
     override var isFlipped: Bool { true }
 
     private static func textHeight(_ text: String, width: CGFloat) -> CGFloat {
@@ -25,10 +27,10 @@ private final class BubbleView: NSView {
     }
 
     /// The card size that fits `text`.
-    static func size(for text: String) -> NSSize {
+    static func size(for text: String, tall: Bool = false) -> NSSize {
         let bounding = (text as NSString).boundingRect(with: NSSize(width: maxTextWidth, height: .greatestFiniteMagnitude),
                                                         options: [.usesLineFragmentOrigin], attributes: attributes)
-        let height = min(maxTextHeight, textHeight(text, width: ceil(bounding.width)))
+        let height = min(tall ? tallTextHeight : maxTextHeight, textHeight(text, width: ceil(bounding.width)))
         return NSSize(width: ceil(bounding.width) + padX * 2, height: height + padY * 2)
     }
 
@@ -45,7 +47,7 @@ private final class BubbleView: NSView {
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: inner).addClip()
         // Too long to fit: keep the newest lines in view.
-        let top = inner.minY + min(0, inner.height - full)
+        let top = tall ? inner.minY : inner.minY + min(0, inner.height - full)
         (text as NSString).draw(with: NSRect(x: inner.minX, y: top, width: inner.width, height: full),
                                 options: [.usesLineFragmentOrigin], attributes: Self.attributes)
         NSGraphicsContext.restoreGraphicsState()
@@ -73,9 +75,10 @@ final class BubbleWindow {
     }
 
     /// Shows `text` above `anchor` (Cocoa screen coordinates), or below it when there is no room.
-    func show(_ text: String, above anchor: NSRect) {
+    func show(_ text: String, above anchor: NSRect, tall: Bool = false) {
+        view.tall = tall
         view.text = text
-        let size = BubbleView.size(for: text)
+        let size = BubbleView.size(for: text, tall: tall)
         let visible = (NSScreen.screens.first { $0.frame.intersects(anchor) } ?? NSScreen.main)?.visibleFrame ?? .zero
         var x = anchor.maxX - size.width
         var y = anchor.maxY + Self.gap
