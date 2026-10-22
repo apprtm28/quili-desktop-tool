@@ -19,6 +19,16 @@ private final class BubbleView: NSView {
     var text = "" { didSet { needsDisplay = true } }
     /// A tall bubble (a summary) reads from its first line instead of following the newest ones.
     var tall = false { didSet { needsDisplay = true } }
+    /// A closable bubble (the finished summary) reserves room for, and draws, a × at its top-right.
+    var closable = false { didSet { needsDisplay = true } }
+    var onClose: (() -> Void)?
+    static let closeExtra: CGFloat = 16, closeSize: CGFloat = 16
+    private var closeRect: NSRect { NSRect(x: bounds.maxX - 8 - Self.closeSize, y: 8, width: Self.closeSize, height: Self.closeSize) }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        if closable, closeRect.insetBy(dx: -5, dy: -5).contains(convert(event.locationInWindow, from: nil)) { onClose?() }
+    }
     override var isFlipped: Bool { true }
 
     private static func textHeight(_ text: String, width: CGFloat) -> CGFloat {
@@ -27,11 +37,11 @@ private final class BubbleView: NSView {
     }
 
     /// The card size that fits `text`.
-    static func size(for text: String, tall: Bool = false) -> NSSize {
+    static func size(for text: String, tall: Bool = false, closable: Bool = false) -> NSSize {
         let bounding = (text as NSString).boundingRect(with: NSSize(width: maxTextWidth, height: .greatestFiniteMagnitude),
                                                         options: [.usesLineFragmentOrigin], attributes: attributes)
         let height = min(tall ? tallTextHeight : maxTextHeight, textHeight(text, width: ceil(bounding.width)))
-        return NSSize(width: ceil(bounding.width) + padX * 2, height: height + padY * 2)
+        return NSSize(width: ceil(bounding.width) + padX * 2 + (closable ? closeExtra : 0), height: height + padY * 2)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -42,7 +52,18 @@ private final class BubbleView: NSView {
         card.lineWidth = 1
         card.stroke()
 
-        let inner = bounds.insetBy(dx: Self.padX, dy: Self.padY)
+        var inner = bounds.insetBy(dx: Self.padX, dy: Self.padY)
+        if closable {
+            inner.size.width -= Self.closeExtra
+            let x = closeRect.insetBy(dx: 3.5, dy: 3.5)
+            let cross = NSBezierPath()
+            cross.move(to: NSPoint(x: x.minX, y: x.minY)); cross.line(to: NSPoint(x: x.maxX, y: x.maxY))
+            cross.move(to: NSPoint(x: x.maxX, y: x.minY)); cross.line(to: NSPoint(x: x.minX, y: x.maxY))
+            cross.lineWidth = 1.6
+            cross.lineCapStyle = .round
+            Brand.muted.setStroke()
+            cross.stroke()
+        }
         let full = Self.textHeight(text, width: inner.width)
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: inner).addClip()
@@ -61,6 +82,8 @@ final class BubbleWindow {
     private static let gap: CGFloat = 6
     private let panel: BubblePanel
     private let view = BubbleView(frame: .zero)
+    private static let fadeSeconds: TimeInterval = 0.25
+    private var fadeID = 0 // bumped by show/hide so a fade that was overtaken does not hide the new bubble
 
     init() {
         panel = BubblePanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -74,11 +97,18 @@ final class BubbleWindow {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
     }
 
-    /// Shows `text` above `anchor` (Cocoa screen coordinates), or below it when there is no room.
-    func show(_ text: String, above anchor: NSRect, tall: Bool = false) {
+    /// Called when the × of a closable bubble is clicked.
+    var onClose: (() -> Void)? { didSet { view.onClose = onClose } }
+
+    /// Shows `text` above `anchor` (Cocoa screen coordinates), or below it when there is no room. A `closable`
+    /// bubble has a × and takes clicks (it stays until closed); the others are click-through.
+    func show(_ text: String, above anchor: NSRect, tall: Bool = false, closable: Bool = false) {
+        cancelFade()
+        panel.ignoresMouseEvents = !closable
+        view.closable = closable
         view.tall = tall
         view.text = text
-        let size = BubbleView.size(for: text, tall: tall)
+        let size = BubbleView.size(for: text, tall: tall, closable: closable)
         let visible = (NSScreen.screens.first { $0.frame.intersects(anchor) } ?? NSScreen.main)?.visibleFrame ?? .zero
         var x = anchor.maxX - size.width
         var y = anchor.maxY + Self.gap
@@ -89,7 +119,35 @@ final class BubbleWindow {
         panel.orderFrontRegardless()
     }
 
+    /// Fades the bubble out, then hides it (the × and the 5 s auto-close); a `show` or `hide` meanwhile cancels the fade.
+    func fadeOut() {
+        guard panel.isVisible else { return }
+        fadeID += 1
+        let id = fadeID
+        panel.ignoresMouseEvents = true // already closing: no more clicks
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = Self.fadeSeconds
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            Task { @MainActor in
+                guard let self, self.fadeID == id else { return }
+                self.hide()
+            }
+        })
+    }
+
+    /// Stops a running fade and makes the panel fully opaque again.
+    private func cancelFade() {
+        fadeID += 1
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            panel.animator().alphaValue = 1
+        }
+    }
+
     func hide() {
+        cancelFade()
+        view.closable = false
         view.text = ""
         panel.orderOut(nil)
     }

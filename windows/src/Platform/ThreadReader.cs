@@ -18,7 +18,8 @@ namespace Quili.Platform
     ///
     /// Slack's tree is not documented, so the reader is defensive: it looks for a group labelled "thread", and
     /// otherwise takes the smallest region around the focused message box that holds several lines of text. The
-    /// debug log records counts and control types only, never message text.
+    /// reader's own log lines record counts and control types only; the controller writes the thread text to the debug
+    /// log when a summary is requested.
     /// </summary>
     public static class ThreadReader
     {
@@ -28,20 +29,30 @@ namespace Quili.Platform
         public const int MaxChars = 38_000;
 
         const int MaxNodes = 25_000, MaxDepth = 60, MinLines = 3;
+        /// <summary>Around Slack's own button the header (title, channel name) holds a few lines too, so ask for more.</summary>
+        const int ButtonRegionLines = 6;
         static readonly TimeSpan TimeLimit = TimeSpan.FromSeconds(6);
 
-        /// <summary>Control types that carry no conversation text; their subtrees are skipped.</summary>
+        /// <summary>
+        /// Control types that carry no conversation text; their subtrees are skipped. Buttons are handled separately:
+        /// Slack makes author names buttons, so their label is kept unless it is a known interface button.
+        /// </summary>
         static readonly HashSet<ControlType> Skipped = new()
         {
-            ControlType.Button, ControlType.Image, ControlType.ScrollBar, ControlType.Menu, ControlType.MenuItem,
+            ControlType.Image, ControlType.ScrollBar, ControlType.Menu, ControlType.MenuItem,
             ControlType.SplitButton, ControlType.CheckBox, ControlType.RadioButton, ControlType.Slider,
             ControlType.ProgressBar, ControlType.TabItem,
         };
 
         sealed class Budget
         {
-            int _nodes = MaxNodes;
-            readonly DateTime _deadline = DateTime.UtcNow + TimeLimit;
+            int _nodes;
+            readonly DateTime _deadline;
+            public Budget(int nodes = MaxNodes, TimeSpan? limit = null)
+            {
+                _nodes = nodes;
+                _deadline = DateTime.UtcNow + (limit ?? TimeLimit);
+            }
             public bool Spend() => --_nodes > 0 && DateTime.UtcNow < _deadline;
         }
 
@@ -57,6 +68,109 @@ namespace Quili.Platform
             catch (Exception) { return false; }
         }
 
+        /// <summary>
+        /// Slack's own "Summarize thread" button, which the floating Summarize button goes beside; its presence is
+        /// what says a thread is open. Screen pixels.
+        /// </summary>
+        public sealed record Anchor(AutomationElement Element, System.Windows.Rect Bounds);
+
+        /// <summary>
+        /// Slack's "Summarize thread" button in its window, null when no thread is open. Cheap enough to poll: a
+        /// still-valid <paramref name="cached"/> button is just re-measured. A fresh search finds the thread pane first
+        /// (a group labelled "Thread", quick to reach) and then looks for the button inside it with its own budget and a
+        /// looser match; with no pane it looks for the exact button anywhere in the window. When nothing is found it logs
+        /// the names of the buttons in the header, so an unexpected Slack layout can be diagnosed from the log.
+        /// </summary>
+        public static Anchor? DetectAnchor(IntPtr hwnd, Anchor? cached)
+        {
+            try
+            {
+                if (cached != null && LiveBounds(cached.Element) is System.Windows.Rect live) return new Anchor(cached.Element, live);
+                var window = AutomationElement.FromHandle(hwnd);
+                var (pane, button) = Scan(window, new Budget(12_000, TimeSpan.FromSeconds(2.5)), stopAtPane: true);
+                if (button != null && LiveBounds(button) is System.Windows.Rect found) return new Anchor(button, found);
+                if (pane != null)
+                {
+                    var inner = FindSummarizeButton(pane, new Budget(6_000, TimeSpan.FromSeconds(1.5)), loose: true);
+                    if (inner != null && LiveBounds(inner) is System.Windows.Rect inside) return new Anchor(inner, inside);
+                    Diagnose(pane, "thread pane");
+                }
+                else Diagnose(window, "window");
+            }
+            catch (Exception) { }
+            return null;
+        }
+
+        /// <summary>The button's bounds while the element is still alive and on screen. Slack's is a small icon button, so only reject slivers.</summary>
+        static System.Windows.Rect? LiveBounds(AutomationElement button)
+        {
+            try
+            {
+                var r = button.Current.BoundingRectangle;
+                if (r.IsEmpty || r.Width < 12 || r.Height < 12 || button.Current.IsOffscreen) return null;
+                return r;
+            }
+            catch (Exception) { return null; }
+        }
+
+        static bool IsButton(ControlType type) => type == ControlType.Button || type == ControlType.SplitButton;
+
+        /// <summary>
+        /// Breadth-first search under <paramref name="root"/> for Slack's "Summarize thread" button. <paramref name="loose"/>
+        /// (used inside the thread pane, where the context already says it is a thread) accepts any button named "summarize".
+        /// </summary>
+        static AutomationElement? FindSummarizeButton(AutomationElement root, Budget budget, bool loose = false)
+        {
+            var queue = new Queue<AutomationElement>();
+            queue.Enqueue(root);
+            while (queue.Count > 0 && budget.Spend())
+            {
+                var el = queue.Dequeue();
+                try
+                {
+                    if (IsButton(el.Current.ControlType) && IsSummarizeButton(el, loose)) return el;
+                }
+                catch (Exception) { continue; }
+                foreach (var child in Children(el)) queue.Enqueue(child);
+            }
+            return null;
+        }
+
+        static DateTime _lastDiagnosis = DateTime.MinValue;
+
+        /// <summary>
+        /// Logs (at most every 20 s) the buttons near the top of <paramref name="root"/> as type|name|help|id|size, so the
+        /// log shows how Slack names its header buttons. Only controls in the header strip are listed, never message text.
+        /// </summary>
+        static void Diagnose(AutomationElement root, string what)
+        {
+            if (DateTime.UtcNow - _lastDiagnosis < TimeSpan.FromSeconds(20)) return;
+            _lastDiagnosis = DateTime.UtcNow;
+            static string Cut(string? s) => (s ?? "").Substring(0, Math.Min(30, (s ?? "").Length)).Replace("|", "/");
+            double top;
+            try { top = root.Current.BoundingRectangle.Top; } catch (Exception) { return; }
+
+            var budget = new Budget(4_000, TimeSpan.FromSeconds(1));
+            var queue = new Queue<AutomationElement>();
+            queue.Enqueue(root);
+            var entries = new List<string>();
+            while (queue.Count > 0 && budget.Spend() && entries.Count < 24)
+            {
+                var el = queue.Dequeue();
+                try
+                {
+                    var type = el.Current.ControlType;
+                    var r = el.Current.BoundingRectangle;
+                    if ((IsButton(type) || type == ControlType.Hyperlink) && !r.IsEmpty && r.Top - top < 140)
+                        entries.Add($"{type.ProgrammaticName.Replace("ControlType.", "")}|{Cut(el.Current.Name)}|{Cut(el.Current.HelpText)}|" +
+                                    $"{Cut(el.Current.AutomationId)}|{(int)r.Width}x{(int)r.Height}");
+                }
+                catch (Exception) { continue; }
+                foreach (var child in Children(el)) queue.Enqueue(child);
+            }
+            DebugLog.Write($"thread: no Summarize thread button in the {what}; header controls: {(entries.Count == 0 ? "none" : string.Join(" ; ", entries))}");
+        }
+
         public static ThreadText? Read(IntPtr hwnd)
         {
             try
@@ -68,35 +182,50 @@ namespace Quili.Platform
                 {
                     // Only a message box in Slack itself is of use; focus may sit in the taskbar after a tray click.
                     var f = AutomationElement.FocusedElement;
-                    if (f != null && f.Current.ProcessId == slackPid) focused = f;
+                    if (f != null && f.Current.ProcessId == slackPid)
+                    {
+                        // Only the message box (an edit field) is left out of the text. Slack can focus a message in
+                        // the thread pane, and skipping that would drop it: the parent message went missing that way.
+                        if (f.Current.ControlType == ControlType.Edit) focused = f;
+                        else DebugLog.Write($"thread: focused element is {f.Current.ControlType.ProgrammaticName.Replace("ControlType.", "")}, not a message box; kept in the text");
+                    }
                 }
                 catch (Exception) { }
 
                 var budget = new Budget();
-                List<string>? lines;
+                var (pane, button) = Scan(window, budget);
+                List<string>? lines = null;
+                AutomationElement? root = null; // the element the lines were read from
                 string how = "group";
-                var pane = FindThreadPane(window, budget);
-                if (pane != null) lines = Collect(pane, focused);
-                else if ((lines = RegionAround(focused, window)) != null) how = "around the message box";
+                if (button != null && (lines = RegionAround(button, focused, window, ButtonRegionLines, out root)) != null)
+                {
+                    how = "around Slack's Summarize thread button";
+                    (lines, root) = Widen(lines, root!, focused, window);
+                }
+                else if (pane != null) { lines = Collect(pane, focused); root = pane; }
+                else if ((lines = RegionAround(focused, focused, window, MinLines, out root)) != null) how = "around the message box";
                 else
                 {
                     DebugLog.Write($"thread: no thread pane found; structure {Structure(window, 0)}");
                     return null;
                 }
 
-                lines = Dedupe(lines!);
+                lines = Dedupe(lines!).Where(l => !ThreadNoise.IsInterfaceLine(l)).ToList();
+                if (lines.Count > 0 && ThreadNoise.IsPaneTitle(lines[0])) lines.RemoveAt(0);
                 DebugLog.Write($"thread: read {lines.Count} lines via {how}");
+                if (root != null && DebugLog.Enabled) DebugLog.Write($"thread structure (control types and text lengths only):\n{Outline(root, 0, new[] { 250 })}");
                 if (lines.Count == 0) return null;
 
-                // Keep the newest messages when the thread is longer than the server accepts.
-                int total = lines.Sum(l => l.Length + 1), dropped = 0;
-                while (total > MaxChars && dropped < lines.Count - 1)
+                // One {{ ... }} group per message; keep the newest messages when the thread is longer than the server accepts.
+                var messages = ThreadFormat.Messages(lines);
+                int total = messages.Sum(m => m.Length + 2), dropped = 0; // plus the blank line between messages
+                while (total > MaxChars && dropped < messages.Count - 1)
                 {
-                    total -= lines[dropped].Length + 1;
+                    total -= messages[dropped].Length + 2;
                     dropped++;
                 }
-                if (dropped > 0) DebugLog.Write($"thread: dropped the oldest {dropped} lines to fit {MaxChars} chars");
-                return new ThreadText(string.Join("\n", lines.Skip(dropped)), dropped > 0);
+                if (dropped > 0) DebugLog.Write($"thread: dropped the oldest {dropped} messages to fit {MaxChars} chars");
+                return new ThreadText(string.Join("\n\n", messages.Skip(dropped)), dropped > 0);
             }
             catch (Exception ex)
             {
@@ -105,11 +234,16 @@ namespace Quili.Platform
             }
         }
 
-        // ---- Finding the thread pane ----
+        // ---- Finding the thread ----
 
-        /// <summary>A group/pane whose label says "Thread" (or the Indonesian "Utas").</summary>
-        static AutomationElement? FindThreadPane(AutomationElement window, Budget budget)
+        /// <summary>
+        /// One breadth-first pass over the window for the thread pane (a group/pane labelled "Thread", or the
+        /// Indonesian "Utas") and Slack's own "Summarize thread" button. The pane is an ancestor of the button, so it
+        /// has been seen by the time the button turns up, and the search stops there.
+        /// </summary>
+        static (AutomationElement? Pane, AutomationElement? Button) Scan(AutomationElement window, Budget budget, bool stopAtPane = false)
         {
+            AutomationElement? pane = null;
             var queue = new Queue<AutomationElement>();
             queue.Enqueue(window);
             while (queue.Count > 0 && budget.Spend())
@@ -118,23 +252,59 @@ namespace Quili.Platform
                 try
                 {
                     var type = el.Current.ControlType;
-                    if (type == ControlType.Group || type == ControlType.Pane || type == ControlType.Custom)
+                    if (pane == null && (type == ControlType.Group || type == ControlType.Pane || type == ControlType.Custom))
                     {
                         var label = (el.Current.Name ?? "").ToLowerInvariant();
-                        if (label.Contains("thread") || label.Contains("utas")) return el;
+                        if (HasWord(label, "thread") || HasWord(label, "utas"))
+                        {
+                            pane = el;
+                            if (stopAtPane) return (el, null);
+                        }
                     }
+                    if (IsButton(type) && IsSummarizeButton(el)) return (pane, el);
                 }
                 catch (Exception) { continue; }
                 foreach (var child in Children(el)) queue.Enqueue(child);
             }
-            return null;
+            return (pane, null);
         }
 
-        /// <summary>Fallback: climbs from the focused message box to the smallest enclosing region with enough text.</summary>
-        static List<string>? RegionAround(AutomationElement? focused, AutomationElement window)
+        /// <summary>
+        /// Whether <paramref name="text"/> (lowercased) contains <paramref name="word"/> as a whole word, so "thread" matches
+        /// "Thread" and "Thread in #general" but not Slack's "Threads" view.
+        /// </summary>
+        static bool HasWord(string text, string word) =>
+            System.Text.RegularExpressions.Regex.IsMatch(text, $@"(?<![\p{{L}}\p{{N}}]){word}(?![\p{{L}}\p{{N}}])");
+
+        /// <summary>
+        /// Slack's own "Summarize thread" button: a short name saying so, on the button or on a direct child (the text
+        /// inside it). Only buttons count, so a message that happens to say "summarize thread" can't match.
+        /// </summary>
+        static bool IsSummarizeButton(AutomationElement button, bool loose = false)
         {
-            if (focused == null) return null;
-            var el = focused;
+            bool Matches(AutomationElement el)
+            {
+                var label = $"{el.Current.Name} {el.Current.HelpText} {el.Current.AutomationId}".ToLowerInvariant();
+                if (label.Length > 80) return false;
+                if (loose) return label.Contains("summar") || label.Contains("ringkas");
+                return (label.Contains("summar") && HasWord(label, "thread")) || (label.Contains("ringkas") && HasWord(label, "utas"));
+            }
+            try
+            {
+                if (Matches(button)) return true;
+                foreach (var child in Children(button)) if (Matches(child)) return true;
+            }
+            catch (Exception) { }
+            return false;
+        }
+
+        /// <summary>Fallback: climbs from <paramref name="start"/> to the smallest enclosing region with at least <paramref name="minLines"/> lines of text.</summary>
+        static List<string>? RegionAround(AutomationElement? start, AutomationElement? skip, AutomationElement window, int minLines,
+            out AutomationElement? region)
+        {
+            region = null;
+            if (start == null) return null;
+            var el = start;
             for (int i = 0; i < 14; i++)
             {
                 AutomationElement? up;
@@ -146,10 +316,42 @@ namespace Quili.Platform
                     if (el.Current.ControlType == ControlType.Document || Automation.Compare(el, window)) return null;
                 }
                 catch (Exception) { return null; }
-                var lines = Collect(el, focused);
-                if (lines.Count >= MinLines) return lines;
+                var lines = Collect(el, skip);
+                if (lines.Count >= minLines) { region = el; return lines; }
             }
             return null;
+        }
+
+        /// <summary>
+        /// The thread's first message (the one that started it) sits above the replies, often in a sibling of the smallest
+        /// region that holds several lines. So keep climbing while the ancestor is still a side pane (at most 60% of the
+        /// window wide), and read from the widest one; the channel list and the main conversation are wider than that.
+        /// </summary>
+        static (List<string> Lines, AutomationElement Region) Widen(List<string> lines, AutomationElement region,
+            AutomationElement? skip, AutomationElement window)
+        {
+            double windowWidth;
+            try { windowWidth = window.Current.BoundingRectangle.Width; } catch (Exception) { return (lines, region); }
+            if (!(windowWidth > 0)) return (lines, region);
+            var best = (Lines: lines, Region: region);
+            var el = region;
+            for (int i = 0; i < 8; i++)
+            {
+                try
+                {
+                    var up = TreeWalker.ControlViewWalker.GetParent(el);
+                    if (up == null) break;
+                    el = up;
+                    if (el.Current.ControlType == ControlType.Document || Automation.Compare(el, window)) break;
+                    if (el.Current.BoundingRectangle.Width > windowWidth * 0.6) break;
+                }
+                catch (Exception) { break; }
+                var more = Collect(el, skip);
+                if (more.Count >= best.Lines.Count) best = (more, el);
+            }
+            if (!ReferenceEquals(best.Region, region) && best.Lines.Count != lines.Count)
+                DebugLog.Write($"thread: widened the region from {lines.Count} to {best.Lines.Count} lines");
+            return best;
         }
 
         // ---- Collecting text ----
@@ -160,11 +362,11 @@ namespace Quili.Platform
             var budget = new Budget();
             var lines = new List<string>();
             var runs = new List<string>();
+            bool firstIsButton = false; // whether the first run of the current line came from a button (an author's name)
 
             void Flush()
             {
-                var line = string.Join(" ", runs).Trim();
-                if (line.Length > 0) lines.Add(line);
+                if (runs.Count > 0) lines.Add(ThreadFormat.Line(runs, firstIsButton));
                 runs.Clear();
             }
 
@@ -175,6 +377,16 @@ namespace Quili.Platform
                 {
                     if (skip != null && Automation.Compare(el, skip)) return;
                     var type = el.Current.ControlType;
+                    if (type == ControlType.Button)
+                    {
+                        var label = ButtonLabel(el);
+                        if (label != null && !ThreadNoise.IsInterfaceButton(label))
+                        {
+                            if (runs.Count == 0) firstIsButton = true;
+                            runs.Add(label);
+                        }
+                        return;
+                    }
                     if (Skipped.Contains(type)) return;
                     // An editable field is a message box, not part of the conversation.
                     if (type == ControlType.Edit && IsEditable(el)) return;
@@ -183,7 +395,11 @@ namespace Quili.Platform
                     if (kids.Count == 0)
                     {
                         var text = LeafText(el, type);
-                        if (text != null) runs.Add(text);
+                        if (text != null)
+                        {
+                            if (runs.Count == 0) firstIsButton = false;
+                            runs.Add(text);
+                        }
                         return;
                     }
                     foreach (var kid in kids) Visit(kid, depth + 1);
@@ -201,6 +417,24 @@ namespace Quili.Platform
         {
             if (!el.TryGetCurrentPattern(ValuePattern.Pattern, out var vp)) return true;
             return !((ValuePattern)vp).Current.IsReadOnly;
+        }
+
+        /// <summary>A button's label: its own name, else the text inside it (Slack's author names are buttons).</summary>
+        static string? ButtonLabel(AutomationElement button)
+        {
+            static string? Clean(string? s)
+            {
+                var t = s?.Trim();
+                return string.IsNullOrEmpty(t) || t.Length > 300 ? null : t;
+            }
+            var own = Clean(button.Current.Name);
+            if (own != null) return own;
+            foreach (var child in Children(button))
+            {
+                var inner = Clean(child.Current.Name);
+                if (inner != null) return inner;
+            }
+            return null;
         }
 
         /// <summary>The text of an element without children: static text, or a link or heading such as an author name or timestamp.</summary>
@@ -242,6 +476,30 @@ namespace Quili.Platform
         }
 
         // ---- Debugging ----
+
+        /// <summary>
+        /// The tree under <paramref name="el"/> as indented lines (control type, child count, and the length of the name):
+        /// enough to see what a message is made of and what the reader skipped, without any message text.
+        /// <paramref name="budget"/>[0] is the number of lines still allowed.
+        /// </summary>
+        static string Outline(AutomationElement el, int depth, int[] budget)
+        {
+            if (budget[0] <= 0 || depth > 16) return "";
+            budget[0]--;
+            string type, name;
+            List<AutomationElement> kids;
+            try
+            {
+                type = el.Current.ControlType.ProgrammaticName.Replace("ControlType.", "");
+                name = (el.Current.Name ?? "").Length.ToString();
+                kids = Children(el);
+            }
+            catch (Exception) { return ""; }
+            var sb = new System.Text.StringBuilder();
+            sb.Append(new string(' ', depth)).Append(type).Append(" kids=").Append(kids.Count).Append(" name=").Append(name).Append('\n');
+            foreach (var kid in kids) sb.Append(Outline(kid, depth + 1, budget));
+            return sb.ToString().TrimEnd('\n');
+        }
 
         /// <summary>Control types only (no text), a few levels deep, so an unexpected Slack layout can be diagnosed from the log.</summary>
         static string Structure(AutomationElement el, int depth, int maxLevels = 5)

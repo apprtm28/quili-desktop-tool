@@ -10,8 +10,12 @@ namespace Quili.Core
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Quili", "debug.log");
         static readonly object Gate = new();
 
+        /// <summary>The "Write debug log" setting; on unless switched off.</summary>
+        public static volatile bool Enabled = true;
+
         public static void Write(string message)
         {
+            if (!Enabled) return;
             try
             {
                 lock (Gate)

@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Windows;
 using Quili.Core;
@@ -20,8 +21,14 @@ namespace Quili
             if (!isNew) { Shutdown(); return; }
 
             _settings = Settings.Load();
+            DebugLog.Enabled = _settings.LoggingEnabled;
+            if (_settings.MockMode)
+            {
+                try { MockServer.Shared.Start(); }
+                catch (Exception ex) { DebugLog.Write($"mock server failed to start: {ex.GetType().Name}: {ex.Message}"); }
+            }
 
-            _tray = new TrayIcon(() => _controller!.SummarizeThread(), ShowSettings, paused => _controller!.Paused = paused, Shutdown);
+            _tray = new TrayIcon(ShowSettings, paused => _controller!.Paused = paused, Shutdown);
             _controller = new ParaphraseController(_settings, Dispatcher, _tray.Notify);
             _controller.SettingsRequested += ShowSettings;
             _controller.Start();

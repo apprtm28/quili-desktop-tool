@@ -12,26 +12,34 @@ struct ThreadText {
 /// sees only what the window renders. Deliberately not main-actor: AX calls can block for seconds on a busy app.
 ///
 /// Slack's tree is not documented, so the reader is defensive: it looks for a landmark labelled "thread", and
-/// otherwise takes the smallest region around the message box that holds several lines of text. The debug log
-/// records counts and roles only, never message text.
+/// otherwise takes the smallest region around the message box that holds several lines of text. The reader's own
+/// log lines record counts and roles only; the controller writes the thread text to the debug log when a summary is
+/// requested.
 enum ThreadReader {
     static let slackBundleId = "com.tinyspeck.slackmacgap"
     /// Under the server's SUMMARIZE_MAX_CHARS (40000).
     static let maxChars = 38_000
     private static let maxNodes = 25_000, maxDepth = 60, timeLimit: TimeInterval = 6
     private static let minLines = 3
+    /// Around Slack's own button the header (title, channel name) holds a few lines too, so ask for more.
+    private static let buttonRegionLines = 6
 
-    /// Roles that carry no conversation text, and whose subtrees are skipped.
+    /// Roles that carry no conversation text, and whose subtrees are skipped. Buttons are handled separately: Slack
+    /// makes author names buttons, so their label is kept unless it is a known interface button.
     private static let skippedRoles: Set<String> = [
-        kAXButtonRole as String, kAXImageRole as String, kAXScrollBarRole as String, kAXMenuRole as String,
+        kAXImageRole as String, kAXScrollBarRole as String, kAXMenuRole as String,
         kAXMenuItemRole as String, kAXMenuButtonRole as String, kAXPopUpButtonRole as String,
         kAXCheckBoxRole as String, kAXRadioButtonRole as String, kAXSliderRole as String,
         kAXProgressIndicatorRole as String, "AXTab",
     ]
 
     private struct Budget {
-        var nodes = ThreadReader.maxNodes
-        let deadline = Date().addingTimeInterval(ThreadReader.timeLimit)
+        var nodes: Int
+        let deadline: Date
+        init(nodes: Int = ThreadReader.maxNodes, limit: TimeInterval = ThreadReader.timeLimit) {
+            self.nodes = nodes
+            deadline = Date().addingTimeInterval(limit)
+        }
         mutating func spend() -> Bool {
             nodes -= 1
             return nodes > 0 && Date() < deadline
@@ -41,71 +49,243 @@ enum ThreadReader {
     static func read(pid: pid_t) -> ThreadText? {
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-        guard let window = (AX.attr(app, kAXFocusedWindowAttribute) ?? AX.attr(app, kAXMainWindowAttribute))
-            .map({ $0 as! AXUIElement }) else {
+        guard let window = focusedWindow(app) else {
             DebugLog.write("thread: no Slack window")
             return nil
         }
-        let focused = AX.focusedElement(ofApp: app)
+        // Only the message box is left out of the text. Slack often focuses a message (a plain group) in the thread
+        // pane, and skipping that would drop it: the parent message went missing exactly that way.
+        let focusedNow = AX.focusedElement(ofApp: app)
+        let focused = focusedNow.flatMap { isMessageBox($0) ? $0 : nil }
+        if let focusedNow, focused == nil {
+            DebugLog.write("thread: focused element is \(AX.string(focusedNow, kAXRoleAttribute) ?? "?"), not a message box; kept in the text")
+        }
 
         var budget = Budget()
+        let found = scan(window, budget: &budget)
         var how = "landmark"
         var lines: [String]
-        if let pane = findThreadPane(in: window, budget: &budget) {
-            lines = collect(pane, skipping: focused)
-        } else if let found = regionAround(focused, window: window) {
+        var root: AXUIElement? // the element the lines were read from
+        if let button = found.button,
+           let region = regionAround(button, skipping: focused, window: window, minLines: buttonRegionLines) {
+            how = "around Slack's Summarize thread button"
+            (root, lines) = widen(region, skipping: focused, window: window)
+        } else if let pane = found.pane {
+            (root, lines) = (pane, collect(pane, skipping: focused))
+        } else if let region = regionAround(focused, skipping: focused, window: window, minLines: minLines) {
             how = "around the message box"
-            lines = found
+            (root, lines) = (region.element, region.lines)
         } else {
             DebugLog.write("thread: no thread pane found; structure \(structure(of: window))")
             return nil
         }
-        lines = dedupe(lines)
+        lines = dedupe(lines).filter { !ThreadNoise.isInterfaceLine($0) }
+        if let first = lines.first, ThreadNoise.isPaneTitle(first) { lines.removeFirst() }
         DebugLog.write("thread: read \(lines.count) lines via \(how)")
+        if let root, DebugLog.enabled { DebugLog.write("thread structure (roles and text lengths only):\n\(outline(of: root))") }
         guard !lines.isEmpty else { return nil }
 
-        // Keep the newest messages when the thread is longer than the server accepts.
-        var total = lines.reduce(0) { $0 + $1.count + 1 }
+        // One {{ ... }} group per message; keep the newest messages when the thread is longer than the server accepts.
+        let messages = ThreadFormat.messages(from: lines)
+        var total = messages.reduce(0) { $0 + $1.count + 2 } // plus the blank line between messages
         var dropped = 0
-        while total > maxChars, dropped < lines.count - 1 {
-            total -= lines[dropped].count + 1
+        while total > maxChars, dropped < messages.count - 1 {
+            total -= messages[dropped].count + 2
             dropped += 1
         }
-        if dropped > 0 { DebugLog.write("thread: dropped the oldest \(dropped) lines to fit \(maxChars) chars") }
-        return ThreadText(text: lines[dropped...].joined(separator: "\n"), truncated: dropped > 0)
+        if dropped > 0 { DebugLog.write("thread: dropped the oldest \(dropped) messages to fit \(maxChars) chars") }
+        return ThreadText(text: messages[dropped...].joined(separator: "\n\n"), truncated: dropped > 0)
     }
 
-    // MARK: - Finding the thread pane
+    /// An editable text field: where the user types a message, never part of the conversation.
+    private static func isMessageBox(_ el: AXUIElement) -> Bool {
+        let role = AX.string(el, kAXRoleAttribute) ?? ""
+        return role == kAXTextAreaRole as String || role == kAXTextFieldRole as String
+            || AX.isSettable(el, kAXValueAttribute)
+    }
 
-    /// A landmark/region whose label says "Thread" (or the Indonesian "Utas").
-    private static func findThreadPane(in window: AXUIElement, budget: inout Budget) -> AXUIElement? {
-        var queue = [window]
+    private static func focusedWindow(_ app: AXUIElement) -> AXUIElement? {
+        (AX.attr(app, kAXFocusedWindowAttribute) ?? AX.attr(app, kAXMainWindowAttribute)).map { $0 as! AXUIElement }
+    }
+
+    /// Slack's own "Summarize thread" button, which the floating Summarize button goes beside; its presence is what
+    /// says a thread is open. Global AX coordinates.
+    struct Anchor {
+        let element: AXUIElement
+        let frame: CGRect
+    }
+
+    /// Slack's "Summarize thread" button in its window, nil when no thread is open. Cheap enough to poll: a
+    /// still-valid `cached` button is just re-measured. A fresh search finds the thread pane first (a landmark labelled
+    /// "Thread", quick to reach) and then looks for the button inside it with its own budget and a looser match; with no
+    /// pane it looks for the exact button anywhere in the window. When nothing is found it logs the labels of the
+    /// buttons in the header, so an unexpected Slack layout can be diagnosed from the log.
+    static func detectAnchor(pid: pid_t, cached: Anchor?) -> Anchor? {
+        if let cached, let frame = liveFrame(of: cached.element) { return Anchor(element: cached.element, frame: frame) }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        guard let window = focusedWindow(app) else { return nil }
+        var budget = Budget(nodes: 12_000, limit: 2.5)
+        let found = scan(window, budget: &budget, stopAtPane: true)
+        if let button = found.button, let frame = liveFrame(of: button) { return Anchor(element: button, frame: frame) }
+        if let pane = found.pane {
+            var inner = Budget(nodes: 6_000, limit: 1.5)
+            if let button = findSummarizeButton(in: pane, budget: &inner, loose: true), let frame = liveFrame(of: button) {
+                return Anchor(element: button, frame: frame)
+            }
+            diagnose(root: pane, what: "thread pane")
+        } else {
+            diagnose(root: window, what: "window")
+        }
+        return nil
+    }
+
+    /// Whether Slack has a visible (not minimized) window. Two cheap lookups, with a short timeout so a busy Slack can't
+    /// stall the watcher.
+    static func isWindowShowing(pid: pid_t) -> Bool {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.3)
+        guard let window = focusedWindow(app) else { return false }
+        return (AX.attr(window, kAXMinimizedAttribute) as? Bool) != true
+    }
+
+    /// The button's frame while the element is still alive. Slack's is a small icon button, so only reject slivers.
+    private static func liveFrame(of button: AXUIElement) -> CGRect? {
+        AXUIElementSetMessagingTimeout(button, 0.3)
+        guard AX.string(button, kAXRoleAttribute) != nil, let frame = AX.frame(button),
+              frame.width >= 12, frame.height >= 12 else { return nil }
+        return frame
+    }
+
+    private static let buttonRoles: Set<String> = [
+        kAXButtonRole as String, kAXMenuButtonRole as String, kAXPopUpButtonRole as String,
+    ]
+
+    /// Breadth-first search under `root` for Slack's "Summarize thread" button. `loose` (used inside the thread pane,
+    /// where the context already says it is a thread) accepts any button labelled "summarize".
+    private static func findSummarizeButton(in root: AXUIElement, budget: inout Budget, loose: Bool = false) -> AXUIElement? {
+        var queue = [root]
         var index = 0
         while index < queue.count, budget.spend() {
             let el = queue[index]
             index += 1
-            let subrole = AX.string(el, kAXSubroleAttribute) ?? ""
-            if subrole.contains("Landmark") || subrole == "AXApplicationGroup" {
-                let label = [AX.string(el, kAXDescriptionAttribute), AX.string(el, kAXTitleAttribute)]
-                    .compactMap { $0 }.joined(separator: " ").lowercased()
-                if label.contains("thread") || label.contains("utas") { return el }
-            }
+            if buttonRoles.contains(AX.string(el, kAXRoleAttribute) ?? ""), isSummarizeButton(el, loose: loose) { return el }
             queue.append(contentsOf: AX.children(el))
         }
         return nil
     }
 
-    /// Fallback: climb from the focused message box to the smallest enclosing region with enough text.
-    private static func regionAround(_ focused: AXUIElement?, window: AXUIElement) -> [String]? {
-        guard var el = focused else { return nil }
+    private static var lastDiagnosis = Date.distantPast
+
+    /// Logs (at most every 20 s) the buttons near the top of `root` as role|title|description|help|id|size, so the log
+    /// shows how Slack labels its header buttons. Only controls in the header strip are listed, never message text.
+    private static func diagnose(root: AXUIElement, what: String) {
+        guard Date().timeIntervalSince(lastDiagnosis) >= 20 else { return }
+        lastDiagnosis = Date()
+        guard let top = AX.frame(root)?.minY else { return }
+        func cut(_ s: String?) -> String { String((s ?? "").prefix(30)).replacingOccurrences(of: "|", with: "/") }
+        var budget = Budget(nodes: 4_000, limit: 1.0)
+        var queue = [root]
+        var index = 0
+        var entries: [String] = []
+        while index < queue.count, budget.spend(), entries.count < 24 {
+            let el = queue[index]
+            index += 1
+            let role = AX.string(el, kAXRoleAttribute) ?? ""
+            if buttonRoles.contains(role) || role == "AXLink", let frame = AX.frame(el), frame.minY - top < 140 {
+                entries.append("\(role.replacingOccurrences(of: "AX", with: ""))|\(cut(AX.string(el, kAXTitleAttribute)))|"
+                    + "\(cut(AX.string(el, kAXDescriptionAttribute)))|\(cut(AX.string(el, kAXHelpAttribute)))|"
+                    + "\(cut(AX.string(el, "AXIdentifier")))|\(Int(frame.width))x\(Int(frame.height))")
+            }
+            queue.append(contentsOf: AX.children(el))
+        }
+        DebugLog.write("thread: no Summarize thread button in the \(what); header controls: \(entries.isEmpty ? "none" : entries.joined(separator: " ; "))")
+    }
+
+    // MARK: - Finding the thread
+
+    /// One breadth-first pass over the window for the thread pane (a landmark/region labelled "Thread", or the
+    /// Indonesian "Utas") and Slack's own "Summarize thread" button. The pane is an ancestor of the button, so it
+    /// has been seen by the time the button turns up, and the search stops there.
+    private static func scan(_ window: AXUIElement, budget: inout Budget,
+                             stopAtPane: Bool = false) -> (pane: AXUIElement?, button: AXUIElement?) {
+        var pane: AXUIElement?
+        var queue = [window]
+        var index = 0
+        while index < queue.count, budget.spend() {
+            let el = queue[index]
+            index += 1
+            if pane == nil {
+                let subrole = AX.string(el, kAXSubroleAttribute) ?? ""
+                if subrole.contains("Landmark") || subrole == "AXApplicationGroup" {
+                    let label = [AX.string(el, kAXDescriptionAttribute), AX.string(el, kAXTitleAttribute)]
+                        .compactMap { $0 }.joined(separator: " ").lowercased()
+                    if hasWord(label, "thread") || hasWord(label, "utas") {
+                        pane = el
+                        if stopAtPane { return (el, nil) }
+                    }
+                }
+            }
+            if buttonRoles.contains(AX.string(el, kAXRoleAttribute) ?? ""), isSummarizeButton(el) { return (pane, el) }
+            queue.append(contentsOf: AX.children(el))
+        }
+        return (pane, nil)
+    }
+
+    /// Whether `text` (lowercased) contains `word` as a whole word, so "thread" matches "Thread" and "Thread in #general"
+    /// but not Slack's "Threads" view.
+    static func hasWord(_ text: String, _ word: String) -> Bool {
+        text.range(of: "(?<![\\p{L}\\p{N}])\(word)(?![\\p{L}\\p{N}])", options: .regularExpression) != nil
+    }
+
+    /// Slack's own "Summarize thread" button: a short label saying so, on the button or on a direct child (the text
+    /// inside it). Only buttons count, so a message that happens to say "summarize thread" can't match.
+    private static func isSummarizeButton(_ button: AXUIElement, loose: Bool = false) -> Bool {
+        func matches(_ el: AXUIElement) -> Bool {
+            let label = [AX.string(el, kAXTitleAttribute), AX.string(el, kAXDescriptionAttribute), AX.string(el, kAXValueAttribute),
+                         AX.string(el, kAXHelpAttribute), AX.string(el, "AXIdentifier")]
+                .compactMap { $0 }.joined(separator: " ").lowercased()
+            guard label.count <= 80 else { return false }
+            if loose { return label.contains("summar") || label.contains("ringkas") }
+            return (label.contains("summar") && hasWord(label, "thread")) || (label.contains("ringkas") && hasWord(label, "utas"))
+        }
+        return matches(button) || AX.children(button).contains(where: matches)
+    }
+
+    /// Fallback: climb from `start` to the smallest enclosing region with at least `minLines` lines of text.
+    private static func regionAround(_ start: AXUIElement?, skipping skip: AXUIElement?, window: AXUIElement,
+                                     minLines: Int) -> (element: AXUIElement, lines: [String])? {
+        guard var el = start else { return nil }
         for _ in 0..<14 {
             guard let up = AX.parent(el) else { return nil }
             el = up
             if (AX.string(el, kAXRoleAttribute) ?? "") == "AXWebArea" || CFEqual(el, window) { return nil }
-            let lines = collect(el, skipping: focused)
-            if lines.count >= minLines { return lines }
+            let lines = collect(el, skipping: skip)
+            if lines.count >= minLines { return (el, lines) }
         }
         return nil
+    }
+
+    /// The thread's first message (the one that started it) sits above the replies, often in a sibling of the smallest
+    /// region that holds several lines. So keep climbing while the ancestor is still a side pane (at most 60% of the
+    /// window wide), and read from the widest one; the channel list and the main conversation are wider than that.
+    private static func widen(_ region: (element: AXUIElement, lines: [String]), skipping skip: AXUIElement?,
+                              window: AXUIElement) -> (element: AXUIElement, lines: [String]) {
+        guard let windowWidth = AX.frame(window)?.width, windowWidth > 0 else { return region }
+        var best = region
+        var el = region.element
+        for _ in 0..<8 {
+            guard let up = AX.parent(el) else { break }
+            el = up
+            if (AX.string(el, kAXRoleAttribute) ?? "") == "AXWebArea" || CFEqual(el, window) { break }
+            if let width = AX.frame(el)?.width, width > windowWidth * 0.6 { break }
+            let lines = collect(el, skipping: skip)
+            if lines.count >= best.lines.count { best = (el, lines) }
+        }
+        if !CFEqual(best.element, region.element) {
+            DebugLog.write("thread: widened the region from \(region.lines.count) to \(best.lines.count) lines")
+        }
+        return best
     }
 
     // MARK: - Collecting text
@@ -115,10 +295,10 @@ enum ThreadReader {
         var budget = Budget()
         var lines: [String] = []
         var runs: [String] = []
+        var firstIsButton = false // whether the first run of the current line came from a button (an author's name)
 
         func flush() {
-            let line = runs.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !line.isEmpty { lines.append(line) }
+            if !runs.isEmpty { lines.append(ThreadFormat.line(from: runs, firstIsButton: firstIsButton)) }
             runs.removeAll()
         }
 
@@ -126,6 +306,13 @@ enum ThreadReader {
             guard depth < maxDepth, budget.spend() else { return }
             if let skip, CFEqual(el, skip) { return }
             let role = AX.string(el, kAXRoleAttribute) ?? ""
+            if role == kAXButtonRole as String {
+                if let label = buttonLabel(el), !ThreadNoise.isInterfaceButton(label) {
+                    if runs.isEmpty { firstIsButton = true }
+                    runs.append(label)
+                }
+                return
+            }
             if skippedRoles.contains(role) { return }
             // An editable field is a message box, not part of the conversation.
             if (role == kAXTextAreaRole as String || role == kAXTextFieldRole as String),
@@ -133,7 +320,10 @@ enum ThreadReader {
 
             let kids = AX.children(el)
             if kids.isEmpty {
-                if let text = leafText(el, role: role) { runs.append(text) }
+                if let text = leafText(el, role: role) {
+                    if runs.isEmpty { firstIsButton = false }
+                    runs.append(text)
+                }
                 return
             }
             for kid in kids { visit(kid, depth: depth + 1) }
@@ -143,6 +333,21 @@ enum ThreadReader {
         visit(root, depth: 0)
         flush()
         return lines
+    }
+
+    /// A button's label: its own title/description/value, else the text inside it (Slack's author names are buttons).
+    private static func buttonLabel(_ button: AXUIElement) -> String? {
+        func clean(_ s: String?) -> String? {
+            guard let t = s?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty, t.count <= 300 else { return nil }
+            return t
+        }
+        func label(_ el: AXUIElement) -> String? {
+            clean(AX.string(el, kAXTitleAttribute)) ?? clean(AX.string(el, kAXDescriptionAttribute))
+                ?? clean(AX.string(el, kAXValueAttribute))
+        }
+        if let own = label(button) { return own }
+        for child in AX.children(button) { if let inner = label(child) { return inner } }
+        return nil
     }
 
     /// The text of an element without children: static text, or a link such as an author name or timestamp.
@@ -169,6 +374,24 @@ enum ThreadReader {
     }
 
     // MARK: - Debugging
+
+    /// The tree under `root` as indented lines (role/subrole, child count, and the lengths of title, description and
+    /// value): enough to see what a message is made of and what the reader skipped, without any message text.
+    private static func outline(of root: AXUIElement, maxNodes: Int = 250, maxDepth: Int = 16) -> String {
+        var out: [String] = []
+        func visit(_ el: AXUIElement, _ depth: Int) {
+            guard out.count < maxNodes, depth <= maxDepth else { return }
+            let role = (AX.string(el, kAXRoleAttribute) ?? "?").replacingOccurrences(of: "AX", with: "")
+            let sub = (AX.string(el, kAXSubroleAttribute) ?? "").replacingOccurrences(of: "AX", with: "")
+            let kids = AX.children(el)
+            func length(_ attribute: String) -> Int { AX.string(el, attribute)?.count ?? 0 }
+            out.append("\(String(repeating: " ", count: depth))\(role)\(sub.isEmpty ? "" : "/\(sub)") kids=\(kids.count) "
+                + "title=\(length(kAXTitleAttribute)) desc=\(length(kAXDescriptionAttribute)) value=\(length(kAXValueAttribute))")
+            for kid in kids { visit(kid, depth + 1) }
+        }
+        visit(root, 0)
+        return out.joined(separator: "\n")
+    }
 
     /// Roles only (no text), a few levels deep, so an unexpected Slack layout can be diagnosed from the log.
     private static func structure(of root: AXUIElement, depth: Int = 0, maxLevels: Int = 5) -> String {

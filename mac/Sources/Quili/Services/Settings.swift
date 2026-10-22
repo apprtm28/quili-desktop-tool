@@ -64,6 +64,18 @@ final class Settings {
     /// The instruction sent to the server as the paraphrase command (never empty, length-capped).
     var effectiveStyle: String { String(style.prefix(Settings.maxStyleLength)) }
 
+    /// Whether `DebugLog` writes anything (the "Write debug log" setting); on by default.
+    var loggingEnabled: Bool {
+        get { DebugLog.enabled }
+        set { defaults.set(newValue, forKey: "loggingEnabled") }
+    }
+
+    /// Offline demo: every request goes to the built-in `MockServer` instead of the real server.
+    var mockMode: Bool {
+        get { defaults.bool(forKey: "mockMode") }
+        set { defaults.set(newValue, forKey: "mockMode") }
+    }
+
     var runAtStartup: Bool {
         get { SMAppService.mainApp.status == .enabled }
         set {

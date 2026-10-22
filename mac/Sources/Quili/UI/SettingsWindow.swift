@@ -224,6 +224,8 @@ final class SettingsWindow: NSObject, NSTextViewDelegate {
     private let eye = IconButton(path: Glyph.eyeOff, side: 32, glyph: 19, color: Brand.hex(0x55625B))
     private let styleView = NSTextView()
     private let startup = CheckRow(title: "Start at login")
+    private let mock = CheckRow(title: "Mock server (offline)")
+    private let logging = CheckRow(title: "Write debug log")
     private var revealed = false
 
     init(settings: Settings) {
@@ -352,6 +354,16 @@ final class SettingsWindow: NSObject, NSTextViewDelegate {
         content.addSubview(startup)
         y += 26 + 16
 
+        // Mock server
+        mock.frame.origin = NSPoint(x: pad + 2, y: y)
+        content.addSubview(mock)
+        y += 26 + 16
+
+        // Debug log
+        logging.frame.origin = NSPoint(x: pad + 2, y: y)
+        content.addSubview(logging)
+        y += 26 + 16
+
         // Repository
         let gitBadge = BadgeView(Glyph.github)
         gitBadge.frame.origin = NSPoint(x: pad, y: y)
@@ -429,6 +441,8 @@ final class SettingsWindow: NSObject, NSTextViewDelegate {
         setKeyRevealed(false)
         styleView.string = settings.style
         startup.checked = settings.runAtStartup
+        mock.checked = settings.mockMode
+        logging.checked = settings.loggingEnabled
         window.center()
         // Opened from the overlay, the app isn't frontmost: raise the window above everything and focus it.
         window.level = .floating
@@ -463,7 +477,31 @@ final class SettingsWindow: NSObject, NSTextViewDelegate {
         settings.serverUrl = ParaphraseClient.normalize(server.stringValue)
         settings.style = styleView.string.trimmingCharacters(in: .whitespacesAndNewlines) // empty falls back to the default
         settings.runAtStartup = startup.checked
+        applyMock(mock.checked)
+        applyLogging(logging.checked)
         window.close()
+    }
+
+    /// Turns the debug log on or off, leaving a note in the log either way (the last line before it goes quiet).
+    private func applyLogging(_ on: Bool) {
+        guard on != settings.loggingEnabled else { return }
+        if !on { DebugLog.write("debug log turned off in Settings") }
+        settings.loggingEnabled = on
+        if on { DebugLog.write("debug log turned on in Settings") }
+    }
+
+    /// Turns the built-in mock server on (and starts it) or off (and stops it).
+    private func applyMock(_ on: Bool) {
+        settings.mockMode = on
+        guard on else { MockServer.shared.stop(); return }
+        Task {
+            do { _ = try await MockServer.shared.start() }
+            catch {
+                self.settings.mockMode = false
+                DebugLog.write("mock server failed to start: \(error)")
+                Notifier.show("Mock server failed", error.localizedDescription)
+            }
+        }
     }
 
     // The instruction box is capped like the XAML's MaxLength: typing stops at the limit and a long paste is cut.

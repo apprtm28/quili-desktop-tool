@@ -21,11 +21,16 @@ namespace Quili
         readonly Action<string, string, NoticeLevel> _notify;
         readonly OverlayWindow _overlay = new();
         readonly BubbleWindow _bubble = new();
+        readonly ThreadWatcher _threadWatcher = new();
+        readonly ThreadButtonWindow _threadButton = new();
+        ThreadPane? _threadPane;
+        DispatcherTimer? _summaryHide; // closes the finished summary after a few seconds
+        bool _summarizing, _summaryDismissed; // a summary is being made / its close button was clicked meanwhile
+        static readonly TimeSpan SummaryAutoClose = TimeSpan.FromSeconds(5);
         readonly FocusTracker _tracker = new();
         TextTarget? _current;
         CancellationTokenSource? _cts;
         bool _writing; // once the field is being written, cancelling would leave it half-replaced
-        DispatcherTimer? _summaryHide; // auto-hides the summary bubble
 
         public ParaphraseController(Settings settings, Dispatcher dispatcher, Action<string, string, NoticeLevel> notify)
         {
@@ -41,23 +46,58 @@ namespace Quili
                 _cts?.Cancel();
             };
             _tracker.TargetChanged += t => _dispatcher.BeginInvoke(() => OnTargetChanged(t));
+            _bubble.CloseRequested += () =>
+            {
+                _summaryHide?.Stop();
+                // Clicked before the summary finished: stop the request too, and let the fade finish the job.
+                if (_summarizing) { _summaryDismissed = true; _cts?.Cancel(); }
+                _bubble.FadeOut();
+            };
+            _threadWatcher.PaneChanged += p => _dispatcher.BeginInvoke(() => OnThreadPaneChanged(p));
+            _threadButton.Clicked += () =>
+            {
+                var pane = _threadPane;
+                if (pane != null) StartSummary(_threadButton.Area, pane.Window);
+            };
         }
 
         /// <summary>The gear in the pill was clicked.</summary>
         public event Action? SettingsRequested;
 
-        public void Start() => _tracker.Start();
+        public void Start()
+        {
+            _tracker.Start();
+            _threadWatcher.Start();
+        }
 
         public bool Paused
         {
             set
             {
                 _tracker.Paused = value;
-                if (value) { _overlay.HideOverlay(); _bubble.HideBubble(); }
+                _threadWatcher.Paused = value;
+                if (value) { _overlay.HideOverlay(); _bubble.HideBubble(); _threadButton.HideButton(); }
             }
         }
 
-        public void Dispose() => _tracker.Dispose();
+        public void Dispose()
+        {
+            _tracker.Dispose();
+            _threadWatcher.Dispose();
+        }
+
+        /// <summary>A thread pane opened, moved or closed in Slack: keep the Summarize button on it.</summary>
+        void OnThreadPaneChanged(ThreadPane? pane)
+        {
+            bool appeared = (pane != null) != (_threadPane != null);
+            _threadPane = pane;
+            if (appeared) // logged when the button appears or disappears, not on every move
+                DebugLog.Write(pane == null
+                    ? "thread button: hidden"
+                    : $"thread button: beside Slack's Summarize thread button, bounds={pane.Bounds}");
+            if (pane == null) _threadButton.HideButton();
+            else _threadButton.ShowBeside(pane.Bounds);
+        }
 
         void OnTargetChanged(TextTarget? target)
         {
@@ -72,56 +112,64 @@ namespace Quili
         }
 
         /// <summary>
-        /// Tray action: reads the Slack thread open in the last app window the user was in and shows its summary
-        /// above the tray. Never writes to Slack; the summary is also copied to the clipboard.
+        /// Reads the Slack thread open in <paramref name="window"/> and shows its summary above <paramref name="anchor"/>
+        /// (the Summarize button). Never writes to Slack; the summary is also copied to the clipboard.
         /// </summary>
-        public void SummarizeThread()
+        void StartSummary(System.Drawing.Rectangle anchor, IntPtr window)
         {
             if (_cts != null || _overlay.IsBusy) return;
-            _ = SummarizeAsync();
+            _ = SummarizeAsync(anchor, window);
         }
 
-        async Task SummarizeAsync()
+        void HideSummary(object? sender, EventArgs e)
+        {
+            _summaryHide?.Stop();
+            _bubble.FadeOut();
+        }
+
+        async Task SummarizeAsync(System.Drawing.Rectangle anchor, IntPtr window)
         {
             var action = TextAction.SummarizeThread;
-            var window = _tracker.LastOtherWindow;
             if (window == IntPtr.Zero || !ThreadReader.IsSlack(window))
             {
-                _notify("Open a Slack thread first", "Switch to Slack, open the thread, then choose Summarize Slack thread.", NoticeLevel.Info);
+                _notify("Open a Slack thread first", "Switch to Slack, open the thread, then click the Summarize button.", NoticeLevel.Info);
                 return;
             }
             DebugLog.Write("summarize clicked");
 
             using var cts = _cts = new CancellationTokenSource();
-            _summaryHide?.Stop();
-            var work = System.Windows.Forms.Screen.PrimaryScreen!.WorkingArea;
-            var anchor = new System.Drawing.Rectangle(work.Right - 1, work.Bottom - 1, 1, 1); // just above the tray
+            _summaryHide?.Stop(); // the previous summary's timer must not close this request's bubble
+            _summarizing = true;
+            _summaryDismissed = false;
             bool previewing = true; // late streamed updates must not re-show the bubble after the request ended
             bool keepBubble = false;
-            _bubble.ShowText("Reading the thread…", anchor, tall: true);
+            // Closable from the start, so a slow summary can be dismissed (which also cancels it).
+            _bubble.ShowText("Reading the thread…", anchor, tall: true, closable: true);
             try
             {
                 var thread = await Task.Run(() => ThreadReader.Read(window), cts.Token);
+                cts.Token.ThrowIfCancellationRequested();
                 if (thread == null || thread.Text.Trim().Length <= 20)
                 {
                     _notify("No thread found", "Open the thread in Slack's side pane (click its replies link) and try again.", NoticeLevel.Info);
                     return;
                 }
                 DebugLog.Write($"read {thread.Text.Length} chars from the thread{(thread.Truncated ? " (oldest messages dropped)" : "")}");
+                DebugLog.Write($"thread text to summarize:\n{thread.Text}");
 
                 var result = await ParaphraseClient.RunAsync(thread.Text, _settings, action, cts.Token,
                     partial => _dispatcher.BeginInvoke(() =>
                     {
-                        if (previewing && !cts.IsCancellationRequested) _bubble.ShowText(partial, anchor, tall: true);
+                        if (previewing && !cts.IsCancellationRequested) _bubble.ShowText(partial, anchor, tall: true, closable: true);
                     }));
                 previewing = false;
                 TextAccess.TrySetClipboard(result);
-                _bubble.ShowText(result, anchor, tall: true);
+                // The close button stays; the finished summary also closes by itself after a few seconds.
+                _bubble.ShowText(result, anchor, tall: true, closable: true);
                 keepBubble = true;
                 _notify("Thread summarized", "The summary was copied to the clipboard.", NoticeLevel.Info);
 
-                // The bubble is click-through, so it goes away on its own.
-                _summaryHide ??= new DispatcherTimer { Interval = TimeSpan.FromSeconds(25) };
+                _summaryHide ??= new DispatcherTimer { Interval = SummaryAutoClose };
                 _summaryHide.Tick -= HideSummary;
                 _summaryHide.Tick += HideSummary;
                 _summaryHide.Start();
@@ -138,15 +186,10 @@ namespace Quili
             finally
             {
                 previewing = false;
-                if (!keepBubble) _bubble.HideBubble();
+                _summarizing = false;
+                if (!keepBubble && !_summaryDismissed) _bubble.HideBubble(); // a dismissed bubble is already fading out
                 _cts = null;
             }
-        }
-
-        void HideSummary(object? sender, EventArgs e)
-        {
-            _summaryHide?.Stop();
-            _bubble.HideBubble();
         }
 
         async Task RunAsync(TextAction action)
@@ -156,6 +199,7 @@ namespace Quili
             if (target == null || _overlay.IsBusy || _cts != null) return;
 
             _overlay.SetBusy(true);
+            _summaryHide?.Stop(); // a summary's timer must not close this request's preview bubble
             using var cts = _cts = new CancellationTokenSource();
             _writing = false;
             var targetWindow = Native.GetForegroundWindow();

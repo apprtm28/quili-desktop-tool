@@ -22,19 +22,8 @@ namespace Quili.Platform
         readonly int _ownPid = Process.GetCurrentProcess().Id;
         volatile bool _stop;
         string? _lastReason;
-        long _lastOtherWindow;   // IntPtr as long, so it can be read from the UI thread
-        IntPtr _seenWindow;
-
-        /// <summary>Shell windows that become foreground when the tray icon is clicked; they never count as "the app the user was in".</summary>
-        static readonly HashSet<string> ShellProcesses = new(StringComparer.OrdinalIgnoreCase)
-        {
-            "explorer", "ShellExperienceHost", "StartMenuExperienceHost", "SearchHost", "SearchApp",
-        };
 
         public volatile bool Paused;
-
-        /// <summary>The last foreground window that belongs to neither Quili nor the Windows shell (the tray menu steals the foreground).</summary>
-        public IntPtr LastOtherWindow => new(Interlocked.Read(ref _lastOtherWindow));
 
         /// <summary>Raised on the polling thread; null means no editable field is focused.</summary>
         public event Action<TextTarget?>? TargetChanged;
@@ -52,7 +41,6 @@ namespace Quili.Platform
             TextTarget? last = null;
             while (!_stop)
             {
-                TrackForeground();
                 TextTarget? current = Paused ? null : Probe();
                 if (!Same(last, current))
                 {
@@ -61,22 +49,6 @@ namespace Quili.Platform
                 }
                 Thread.Sleep(250);
             }
-        }
-
-        void TrackForeground()
-        {
-            var hwnd = Native.GetForegroundWindow();
-            if (hwnd == IntPtr.Zero || hwnd == _seenWindow) return;
-            _seenWindow = hwnd;
-            try
-            {
-                Native.GetWindowThreadProcessId(hwnd, out var pid);
-                if (pid == 0 || pid == _ownPid) return;
-                using var process = Process.GetProcessById((int)pid);
-                if (ShellProcesses.Contains(process.ProcessName)) return;
-                Interlocked.Exchange(ref _lastOtherWindow, hwnd.ToInt64());
-            }
-            catch (Exception) { }
         }
 
         static bool Same(TextTarget? a, TextTarget? b)

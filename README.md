@@ -61,10 +61,11 @@ The workflow (`.github/workflows/release.yml`) refuses a tag that doesn't match 
 The builds aren't code-signed, so first launch shows a warning: on Windows choose *More info → Run anyway* (SmartScreen); on macOS right-click the app and choose *Open*, or run `xattr -dr com.apple.quarantine Quili.app`.
 
 ## Summarize a Slack thread
-Open a thread in the Slack desktop app's side pane, then choose **Summarize Slack thread** from the tray icon (Windows) or menu-bar icon (macOS). Quili reads the thread text from Slack's window through the accessibility API (no Slack API, token or admin approval), sends it to `POST /api/summarize-thread` on your server, shows the summary in a bubble for 25 seconds and copies it to the clipboard. Nothing is written to Slack.
+Open a thread in the Slack desktop app's side pane: a round green **✦** button appears just left of Slack's own "Summarize thread" button (hover it for the "Summarize thread on Quili" tooltip). Click it. Quili reads the thread text from Slack's window through the accessibility API (no Slack API, token or admin approval), sends it to `POST /api/summarize-thread` on your server, shows the summary in a bubble (it closes by itself after 5 seconds, or sooner with the × at its top-right) and copies it to the clipboard. Nothing is written to Slack.
 
 - Only what the window has rendered is read, so a very long thread may need scrolling to the top first; the oldest lines are dropped if the thread exceeds ~38,000 characters.
-- Slack's accessibility layout isn't documented and may change between releases. If it says "No thread found", the debug log (`debug.log`) records how many lines were read and the shape of the window (control types only, never message text).
+- Slack's accessibility layout isn't documented and may change between releases. If it says "No thread found", the debug log (`debug.log`) records how many lines were read and the shape of the window (control types only). When you click Summarize, the thread text that is sent is also written to `debug.log` in full, so the log then holds thread content (it is cleared once it passes 1 MB). Untick **Write debug log** in Settings to stop all logging.
+- **Server down?** Tick **Mock server (offline)** in Settings and press Save: Quili starts a tiny built-in server on `127.0.0.1` and sends every action (paraphrase, translate and summarize) to it; it always answers with fixed sample text. Untick it and Save to stop the mock and go back to the real server. `tools/mock_server.py` is the same mock as a standalone script for other clients.
 - Slack must be exposing its accessibility tree: on Windows start it with `--force-renderer-accessibility` if the first attempt finds nothing.
 
 ## Notes / limitations

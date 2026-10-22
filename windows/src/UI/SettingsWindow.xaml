@@ -282,6 +282,10 @@
 
                 <CheckBox x:Name="StartupBox" Content="Start with Windows" Style="{StaticResource GreenCheck}" Margin="2,20,0,0" />
 
+                <CheckBox x:Name="MockBox" Content="Mock server (offline)" Style="{StaticResource GreenCheck}" Margin="2,16,0,0" />
+
+                <CheckBox x:Name="LogBox" Content="Write debug log" Style="{StaticResource GreenCheck}" Margin="2,16,0,0" />
+
                 <Grid Margin="0,16,0,0">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="34" /><ColumnDefinition Width="14" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                     <Border Style="{StaticResource IconBadge}"><Path Style="{StaticResource BadgeGlyph}" Data="{StaticResource GithubGeometry}" /></Border>

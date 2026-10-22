@@ -25,6 +25,12 @@ namespace Quili.Core
         public string Style { get; set; } = DefaultStyle;
         public bool RunAtStartup { get; set; }
 
+        /// <summary>Whether <see cref="DebugLog"/> writes anything (the "Write debug log" setting); on by default.</summary>
+        public bool LoggingEnabled { get; set; } = true;
+
+        /// <summary>Offline demo: every request goes to the built-in <see cref="MockServer"/> instead of the real server.</summary>
+        public bool MockMode { get; set; }
+
         static readonly string Dir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Quili");
         static readonly string FilePath = Path.Combine(Dir, "settings.json");

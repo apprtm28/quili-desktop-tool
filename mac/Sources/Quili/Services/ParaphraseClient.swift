@@ -35,8 +35,17 @@ enum ParaphraseClient {
     static func run(_ text: String, settings: Settings, action: TextAction,
                     onText: (@MainActor (String) -> Void)? = nil) async throws -> String {
         let apiKey = settings.apiKey
-        let server = normalize(settings.serverUrl)
-        guard !apiKey.isEmpty, let url = URL(string: server + action.path), !server.isEmpty else {
+        // With the mock toggle on, every action is answered by the built-in mock, which needs neither a server URL
+        // nor an API key.
+        let mocked = settings.mockMode
+        let server: String
+        if mocked {
+            do { server = try await MockServer.shared.start() }
+            catch { throw ParaphraseError(message: "The mock server could not start: \(error.localizedDescription)") }
+        } else {
+            server = normalize(settings.serverUrl)
+        }
+        guard mocked || !apiKey.isEmpty, let url = URL(string: server + action.path), !server.isEmpty else {
             throw ParaphraseError(message: "Server URL or API key not set. Open Settings from the menu bar icon.")
         }
 

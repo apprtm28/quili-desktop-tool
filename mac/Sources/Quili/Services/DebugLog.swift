@@ -12,7 +12,11 @@ enum DebugLog {
         let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"; return f
     }()
 
+    /// The "Write debug log" setting (on unless switched off); read from the same preference `Settings` writes.
+    static var enabled: Bool { UserDefaults.standard.object(forKey: "loggingEnabled") as? Bool ?? true }
+
     static func write(_ message: String) {
+        guard enabled else { return }
         queue.async {
             if let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int, size > 1_000_000 {
                 try? FileManager.default.removeItem(at: url)

@@ -3,14 +3,23 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowInTaskbar="False" ShowActivated="False" ResizeMode="NoResize"
-        Focusable="False" IsHitTestVisible="False" Width="40" Height="40">
-    <!-- Live preview of the text while the model is still writing it; click-through, never takes focus. -->
+        Focusable="False" Width="40" Height="40">
+    <!-- Live preview of the text while the model is still writing it; click-through and never takes focus, except
+         the finished summary, which has a close button and stays until it is clicked. -->
     <Border x:Name="Card" Background="White" BorderBrush="#26000000" BorderThickness="1" CornerRadius="10"
             Padding="12,9" HorizontalAlignment="Left" VerticalAlignment="Top">
-        <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
-                      MaxHeight="150">
-            <TextBlock x:Name="Body" TextWrapping="Wrap" MaxWidth="320" FontSize="13" LineHeight="18"
-                       Foreground="#1F2A24" />
-        </ScrollViewer>
+        <Grid>
+            <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
+                          MaxHeight="150">
+                <TextBlock x:Name="Body" TextWrapping="Wrap" MaxWidth="320" FontSize="13" LineHeight="18"
+                           Foreground="#1F2A24" />
+            </ScrollViewer>
+            <Border x:Name="CloseButton" Visibility="Collapsed" HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Width="16" Height="16" Margin="0,-1,-4,0" Background="Transparent" Cursor="Hand" ToolTip="Close"
+                    MouseLeftButtonUp="Close_MouseLeftButtonUp">
+                <Path Data="M3.5,3.5 L12.5,12.5 M12.5,3.5 L3.5,12.5" Stroke="#6E7B73" StrokeThickness="1.6"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+            </Border>
+        </Grid>
     </Border>
 </Window>

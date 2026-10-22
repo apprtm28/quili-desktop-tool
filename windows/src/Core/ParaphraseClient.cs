@@ -44,8 +44,17 @@ namespace Quili.Core
             CancellationToken ct = default, Action<string>? onText = null)
         {
             var apiKey = settings.ApiKey;
-            var serverUrl = NormalizeServerUrl(settings.ServerUrl);
-            if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(serverUrl))
+            // With the mock toggle on, every action is answered by the built-in mock, which needs neither a
+            // server URL nor an API key.
+            bool mocked = settings.MockMode;
+            string serverUrl;
+            if (mocked)
+            {
+                try { serverUrl = MockServer.Shared.Start(); }
+                catch (Exception ex) { throw new InvalidOperationException($"The mock server could not start: {ex.Message}"); }
+            }
+            else serverUrl = NormalizeServerUrl(settings.ServerUrl);
+            if ((!mocked && string.IsNullOrWhiteSpace(apiKey)) || string.IsNullOrWhiteSpace(serverUrl))
                 throw new InvalidOperationException("Server URL or API key not set. Open Settings from the tray icon.");
 
             text = TextHygiene.StripLoneSurrogates(text);
@@ -66,7 +75,7 @@ namespace Quili.Core
                 {
                     Content = new StringContent(body, new UTF8Encoding(false), "application/json"),
                 };
-                req.Headers.Add("X-API-Key", apiKey);
+                if (!string.IsNullOrEmpty(apiKey)) req.Headers.Add("X-API-Key", apiKey);
                 req.Headers.Accept.ParseAdd("text/event-stream");
                 req.Headers.Accept.ParseAdd("application/json");
                 return req;

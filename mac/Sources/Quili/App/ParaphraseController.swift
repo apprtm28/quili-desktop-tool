@@ -8,9 +8,14 @@ final class ParaphraseController {
     private let tracker = FocusTracker()
     private let overlay = OverlayWindow()
     private let bubble = BubbleWindow()
+    private let threadWatcher = ThreadWatcher()
+    private let threadButton = ThreadButtonWindow()
+    private var threadPane: ThreadPane?
+    private var summaryHideTask: Task<Void, Never>? // closes the finished summary after a few seconds
+    private var summaryDismissed = false // the × was clicked while the summary was still being made
+    private static let summaryAutoCloseSeconds: UInt64 = 5
     private var current: TextTarget?
     private var request: Task<Void, Never>?
-    private var hideSummaryTimer: Task<Void, Never>? // auto-hides the summary bubble
     private var previewing = false // late streamed updates must not re-show the bubble after the request ended
     private var writing = false // once the field is being written, cancelling would leave it half-replaced
 
@@ -27,19 +32,44 @@ final class ParaphraseController {
             self.request?.cancel()
         }
         tracker.onChange = { [weak self] target in self?.targetChanged(target) }
+        bubble.onClose = { [weak self] in
+            guard let self else { return }
+            self.summaryHideTask?.cancel()
+            // Clicked before the summary finished: stop the request too, and let the fade finish the job.
+            if self.previewing { self.summaryDismissed = true; self.request?.cancel() }
+            self.bubble.fadeOut()
+        }
+        threadWatcher.onChange = { [weak self] pane in self?.threadPaneChanged(pane) }
+        threadButton.onClick = { [weak self] in
+            guard let self, let pane = self.threadPane else { return }
+            self.summarizeThread(in: pane.app, below: self.threadButton.frame)
+        }
     }
 
     /// The gear in the pill was clicked.
     var onOpenSettings: (() -> Void)?
 
-    func start() { tracker.start() }
+    func start() {
+        tracker.start()
+        threadWatcher.start()
+    }
 
     var paused: Bool {
         get { tracker.paused }
         set {
             tracker.paused = newValue
-            if newValue { overlay.hide(); bubble.hide() }
+            threadWatcher.paused = newValue
+            if newValue { overlay.hide(); bubble.hide(); threadButton.hide() }
         }
+    }
+
+    /// A thread pane opened, moved or closed in Slack: keep the Summarize button on it.
+    private func threadPaneChanged(_ pane: ThreadPane?) {
+        let appeared = (pane != nil) != (threadPane != nil)
+        threadPane = pane
+        guard let pane else { if appeared { DebugLog.write("thread button: hidden") }; threadButton.hide(); return }
+        if appeared { DebugLog.write("thread button: beside Slack's Summarize thread button, frame=\(pane.frame)") }
+        threadButton.show(besideButton: pane.frame)
     }
 
     private func targetChanged(_ target: TextTarget?) {
@@ -51,8 +81,8 @@ final class ParaphraseController {
         if let target { overlay.show(at: target.frame, sameField: sameField) } else { overlay.hide() }
     }
 
-    /// Menu-bar action: reads the Slack thread open in `app`'s window and shows its summary under `anchor`
-    /// (the menu-bar item, Cocoa screen coordinates). Never writes to Slack; the summary is also copied.
+    /// Reads the Slack thread open in `app`'s window and shows its summary under `anchor` (the Summarize button, Cocoa
+    /// screen coordinates). Never writes to Slack; the summary is also copied.
     func summarizeThread(in app: NSRunningApplication?, below anchor: NSRect) {
         guard request == nil, !overlay.isBusy else { return }
         request = Task { await self.runSummary(in: app, below: anchor) }
@@ -60,6 +90,8 @@ final class ParaphraseController {
 
     private func runSummary(in app: NSRunningApplication?, below anchor: NSRect) async {
         defer { request = nil }
+        summaryHideTask?.cancel() // the previous summary's timer must not close this request's bubble
+        summaryDismissed = false
         let action = TextAction.summarizeThread
         guard AXIsProcessTrusted() else {
             Notifier.show("Accessibility permission needed",
@@ -67,41 +99,43 @@ final class ParaphraseController {
             return
         }
         guard let app, app.bundleIdentifier == ThreadReader.slackBundleId else {
-            Notifier.show("Open a Slack thread first", "Switch to Slack, open the thread, then choose Summarize Slack thread.")
+            Notifier.show("Open a Slack thread first", "Switch to Slack, open the thread, then click the Summarize button.")
             return
         }
         DebugLog.write("summarize clicked (Slack pid \(app.processIdentifier))")
         previewing = true
         defer { previewing = false }
-        hideSummaryTimer?.cancel()
-        bubble.show("Reading the thread…", above: anchor, tall: true)
+        // Closable from the start, so a slow summary can be dismissed (which also cancels it).
+        bubble.show("Reading the thread…", above: anchor, tall: true, closable: true)
 
         do {
             let pid = app.processIdentifier
             let thread = await Task.detached { ThreadReader.read(pid: pid) }.value
+            try Task.checkCancellation()
             guard let thread, thread.text.trimmingCharacters(in: .whitespacesAndNewlines).count > 20 else {
                 bubble.hide()
                 Notifier.show("No thread found", "Open the thread in Slack's side pane (click its replies link) and try again.")
                 return
             }
             DebugLog.write("read \(thread.text.count) chars from the thread\(thread.truncated ? " (oldest messages dropped)" : "")")
+            DebugLog.write("thread text to summarize:\n\(thread.text)")
 
             let result = try await ParaphraseClient.run(thread.text, settings: settings, action: action) { [weak self] partial in
                 guard let self, self.previewing else { return }
-                self.bubble.show(partial, above: anchor, tall: true)
+                self.bubble.show(partial, above: anchor, tall: true, closable: true)
             }
             TextAccess.setPasteboard(result)
-            bubble.show(result, above: anchor, tall: true)
+            // The × stays; the finished summary also closes by itself after a few seconds.
+            bubble.show(result, above: anchor, tall: true, closable: true)
             Notifier.show("Thread summarized", "The summary was copied to the clipboard.")
-            // The bubble is click-through, so it goes away on its own.
-            hideSummaryTimer = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 25_000_000_000)
-                if !Task.isCancelled { self?.bubble.hide() }
+            summaryHideTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: Self.summaryAutoCloseSeconds * 1_000_000_000)
+                if !Task.isCancelled { self?.bubble.fadeOut() }
             }
         } catch is CancellationError {
-            bubble.hide()
+            if !summaryDismissed { bubble.hide() } // a dismissed bubble is already fading out
         } catch let error as URLError where error.code == .cancelled {
-            bubble.hide()
+            if !summaryDismissed { bubble.hide() }
         } catch {
             bubble.hide()
             DebugLog.write("\(action) failed: \(error.localizedDescription)")
@@ -113,6 +147,7 @@ final class ParaphraseController {
         DebugLog.write("\(action) clicked (target=\(current == nil ? "none" : "set"), busy=\(overlay.isBusy))")
         // Declared first so every exit, including the guard below, frees the controller for the next click.
         defer { request = nil }
+        summaryHideTask?.cancel() // a summary's timer must not close this request's preview bubble
         guard let target = current, !overlay.isBusy else { return }
         overlay.setBusy(true)
         writing = false
