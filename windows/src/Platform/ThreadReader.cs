@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Windows.Automation;
 using Quili.Core;
 
@@ -32,6 +33,10 @@ namespace Quili.Platform
         /// <summary>Around Slack's own button the header (title, channel name) holds a few lines too, so ask for more.</summary>
         const int ButtonRegionLines = 6;
         static readonly TimeSpan TimeLimit = TimeSpan.FromSeconds(6);
+        /// <summary>Scrolling the pane to read all of a long thread: how far each step goes (of the visible part), the most steps, and the time allowed.</summary>
+        const double ScrollStepFraction = 0.7;
+        const int MaxScrollSteps = 40;
+        static readonly TimeSpan ScrollTimeLimit = TimeSpan.FromSeconds(15);
 
         /// <summary>
         /// Control types that carry no conversation text; their subtrees are skipped. Buttons are handled separately:
@@ -210,9 +215,9 @@ namespace Quili.Platform
                     return null;
                 }
 
-                lines = Dedupe(lines!).Where(l => !ThreadNoise.IsInterfaceLine(l)).ToList();
-                if (lines.Count > 0 && ThreadNoise.IsPaneTitle(lines[0])) lines.RemoveAt(0);
+                lines = Cleaned(lines!);
                 DebugLog.Write($"thread: read {lines.Count} lines via {how}");
+                if (root != null && lines.Count > 0) lines = GatherByScrolling(root, focused, lines);
                 if (root != null && DebugLog.Enabled) DebugLog.Write($"thread structure (control types and text lengths only):\n{Outline(root, 0, new[] { 250 })}");
                 if (lines.Count == 0) return null;
 
@@ -352,6 +357,142 @@ namespace Quili.Platform
             if (!ReferenceEquals(best.Region, region) && best.Lines.Count != lines.Count)
                 DebugLog.Write($"thread: widened the region from {lines.Count} to {best.Lines.Count} lines");
             return best;
+        }
+
+        // ---- Scrolling ----
+
+        /// <summary>
+        /// Slack (Chromium) only puts the messages near the viewport into the UI Automation tree, so a long thread has to be
+        /// scrolled through. This scrolls the pane (UIA ScrollPattern) to its top, reads a screenful, scrolls down a step at
+        /// a time reading each, merges the views by their overlap and scrolls back to the top when done. Any
+        /// problem (no scrollable element, no overlap) just leaves what was read.
+        /// </summary>
+        static List<string> GatherByScrolling(AutomationElement root, AutomationElement? skip, List<string> visible)
+        {
+            var scroller = FindScroller(root, out var pattern);
+            if (scroller == null || pattern == null) return visible;
+            var deadline = DateTime.UtcNow + ScrollTimeLimit;
+            bool Scroll(double percent)
+            {
+                try { pattern.SetScrollPercent(ScrollPattern.NoScroll, Math.Max(0, Math.Min(100, percent))); return true; }
+                catch (Exception) { return false; }
+            }
+            double Percent()
+            {
+                try { return pattern.Current.VerticalScrollPercent; } catch (Exception) { return 100; }
+            }
+            // The view once scrolling has settled (rendering takes a moment).
+            List<string> SettledView()
+            {
+                List<string>? previous = null;
+                for (int i = 0; i < 8; i++)
+                {
+                    System.Threading.Thread.Sleep(120);
+                    var view = Cleaned(Collect(root, skip));
+                    if (previous != null && SameView(previous, view)) return view;
+                    previous = view;
+                }
+                return previous ?? new List<string>();
+            }
+
+            try
+            {
+                // One step is a fraction of what is visible, as a share of the whole scroll range.
+                double viewSize = pattern.Current.VerticalViewSize; // percent of the content that is visible
+                if (viewSize <= 0 || viewSize >= 100) return visible;
+                double step = viewSize * ScrollStepFraction / (100 - viewSize) * 100;
+
+                if (!Scroll(0)) return visible;
+                var current = SettledView();
+                if (current.Count == 0) return visible;
+                var all = current;
+                int steps = 0, retries = 0;
+                while (steps < MaxScrollSteps && DateTime.UtcNow < deadline)
+                {
+                    double from = Percent();
+                    if (from >= 99.9) break; // the bottom
+                    if (!Scroll(from + step)) break;
+                    var next = SettledView();
+                    if (next.Count == 0 || SameView(next, current)) break;
+                    var (merged, overlapped) = Merge(all, next);
+                    if (overlapped || retries >= 4)
+                    {
+                        all = merged;
+                        current = next;
+                        steps++;
+                    }
+                    else
+                    {
+                        // The step jumped past what was read: go back and take smaller ones.
+                        retries++;
+                        Scroll(from);
+                        SettledView();
+                        step = Math.Max(1, step / 2);
+                    }
+                }
+                DebugLog.Write($"thread: scrolled {steps} steps; {visible.Count} -> {all.Count} lines");
+                return all;
+            }
+            catch (Exception ex)
+            {
+                DebugLog.Write($"thread: scrolling failed: {ex.GetType().Name}");
+                return visible;
+            }
+            finally
+            {
+                Scroll(0); // done: back to the top, where the thread starts
+            }
+        }
+
+        /// <summary>The vertically scrollable element in the pane (the tallest one), with its ScrollPattern.</summary>
+        static AutomationElement? FindScroller(AutomationElement root, out ScrollPattern? pattern)
+        {
+            pattern = null;
+            AutomationElement? best = null;
+            double bestHeight = 0;
+            var queue = new Queue<AutomationElement>();
+            queue.Enqueue(root);
+            for (int seen = 0; queue.Count > 0 && seen < 2000; seen++)
+            {
+                var el = queue.Dequeue();
+                try
+                {
+                    if (el.TryGetCurrentPattern(ScrollPattern.Pattern, out var p) && p is ScrollPattern sp
+                        && sp.Current.VerticallyScrollable && el.Current.BoundingRectangle.Height > bestHeight)
+                    {
+                        best = el;
+                        pattern = sp;
+                        bestHeight = el.Current.BoundingRectangle.Height;
+                    }
+                }
+                catch (Exception) { }
+                foreach (var child in Children(el)) queue.Enqueue(child);
+            }
+            return best;
+        }
+
+        /// <summary>Lines as compared across views: a message's relative time ("32 minutes ago") may roll over while scrolling.</summary>
+        static string Normalized(string line) => Regex.Replace(line, @" \[[^\]]*\]", "");
+
+        static bool SameView(List<string> a, List<string> b) =>
+            a.Count == b.Count && a.Zip(b, (x, y) => Normalized(x) == Normalized(y)).All(same => same);
+
+        /// <summary><paramref name="next"/> appended to <paramref name="all"/> without the lines they share: the longest tail of <paramref name="all"/> that is also the head of <paramref name="next"/>.</summary>
+        static (List<string> Lines, bool Overlapped) Merge(List<string> all, List<string> next)
+        {
+            var a = all.Select(Normalized).ToList();
+            var n = next.Select(Normalized).ToList();
+            int k = Math.Min(a.Count, n.Count);
+            while (k > 0 && !a.Skip(a.Count - k).SequenceEqual(n.Take(k))) k--;
+            return (all.Concat(next.Skip(k)).ToList(), k > 0);
+        }
+
+        /// <summary>One read's lines with duplicates, interface chrome and the pane's title line removed.</summary>
+        static List<string> Cleaned(List<string> lines)
+        {
+            var result = Dedupe(lines).Where(l => !ThreadNoise.IsInterfaceLine(l)).ToList();
+            if (result.Count > 0 && ThreadNoise.IsPaneTitle(result[0])) result.RemoveAt(0);
+            return result;
         }
 
         // ---- Collecting text ----

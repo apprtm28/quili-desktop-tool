@@ -23,6 +23,9 @@ enum ThreadReader {
     private static let minLines = 3
     /// Around Slack's own button the header (title, channel name) holds a few lines too, so ask for more.
     private static let buttonRegionLines = 6
+    /// Scrolling the pane to read all of a long thread: how far each step goes (of the pane's height), the most steps in
+    /// either direction, and the time allowed for the whole pass.
+    private static let scrollStepFraction = 0.7, maxScrollSteps = 40, scrollTimeLimit: TimeInterval = 15
 
     /// Roles that carry no conversation text, and whose subtrees are skipped. Buttons are handled separately: Slack
     /// makes author names buttons, so their label is kept unless it is a known interface button.
@@ -79,9 +82,11 @@ enum ThreadReader {
             DebugLog.write("thread: no thread pane found; structure \(structure(of: window))")
             return nil
         }
-        lines = dedupe(lines).filter { !ThreadNoise.isInterfaceLine($0) }
-        if let first = lines.first, ThreadNoise.isPaneTitle(first) { lines.removeFirst() }
+        lines = cleaned(lines)
         DebugLog.write("thread: read \(lines.count) lines via \(how)")
+        if let root, !lines.isEmpty {
+            lines = gatherByScrolling(root: root, pid: pid, skipping: focused, visible: lines)
+        }
         if let root, DebugLog.enabled { DebugLog.write("thread structure (roles and text lengths only):\n\(outline(of: root))") }
         guard !lines.isEmpty else { return nil }
 
@@ -286,6 +291,140 @@ enum ThreadReader {
             DebugLog.write("thread: widened the region from \(region.lines.count) to \(best.lines.count) lines")
         }
         return best
+    }
+
+    // MARK: - Scrolling
+
+    /// Slack (Chromium) only puts the messages near the viewport into the accessibility tree, so a long thread has to be
+    /// scrolled through. This scrolls the pane to its top, reads a screenful, scrolls down a step at a time reading each,
+    /// and merges the views by their overlap. Scrolling is smooth (scroll-wheel events in small slices); when Slack
+    /// ignores those, the accessibility tree is asked to bring the first/last rendered message into view instead, which
+    /// works but jumps. Any problem (no scrolling happens, no overlap) just leaves what was read. The pane always goes
+    /// to the top first and is back at the top when done.
+    private static func gatherByScrolling(root: AXUIElement, pid: pid_t, skipping skip: AXUIElement?,
+                                          visible: [String]) -> [String] {
+        guard let frame = AX.frame(root), frame.height > 200 else { return visible }
+        let point = CGPoint(x: frame.midX, y: frame.midY)
+        let deadline = Date().addingTimeInterval(scrollTimeLimit)
+        let list = findList(in: root)
+        let step = frame.height * scrollStepFraction
+        var wheelUsable = true // until the accessibility action moves the pane where the wheel did not
+        var wheelMoves = 0, jumpMoves = 0
+
+        /// Scroll-wheel events in small slices so the pane glides like under a trackpad. Positive = towards the top.
+        func smoothScroll(_ dy: CGFloat) {
+            let slices = 10
+            for _ in 0..<slices {
+                guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                                          wheel1: Int32((dy / CGFloat(slices)).rounded()), wheel2: 0, wheel3: 0) else { return }
+                event.location = point
+                event.post(tap: .cghidEventTap)
+                Thread.sleep(forTimeInterval: 0.012)
+            }
+        }
+        /// The view once scrolling has settled (smooth scrolling and rendering take a moment).
+        func settledView() -> [String] {
+            var previous: [String]?
+            for _ in 0..<10 {
+                Thread.sleep(forTimeInterval: 0.12)
+                let view = cleaned(collect(root, skipping: skip))
+                if let previous, sameView(previous, view) { return view }
+                previous = view
+            }
+            return previous ?? []
+        }
+        /// Moves the pane one step towards the top (`up`) or bottom and returns the new view, nil when it did not move
+        /// (the end of the thread).
+        func advance(up: Bool, from current: [String]) -> [String]? {
+            if wheelUsable {
+                smoothScroll(up ? step : -step)
+                let view = settledView()
+                if !view.isEmpty, !sameView(view, current) {
+                    // It moved; check it moved the way that was asked (the first view then ends where the other starts).
+                    let expected = up ? merge(view, current).overlapped : merge(current, view).overlapped
+                    if expected { wheelMoves += 1; return view }
+                    wheelUsable = false // moved the wrong way or too far: do not trust the wheel any more
+                }
+                // Not moved: the wheel is ignored, or this is the end; the accessibility action tells which.
+            }
+            let items = list.map { AX.children($0) } ?? []
+            guard let list, let item = up ? items.first : items.last,
+                  AXUIElementPerformAction(item, "AXScrollToVisible" as CFString) == .success else { return nil }
+            let view = settledView()
+            guard !view.isEmpty, !sameView(view, current) else { return nil }
+            wheelUsable = false
+            jumpMoves += 1
+            return view
+        }
+
+        // Up to the top.
+        var current = visible
+        var upSteps = 0
+        while upSteps < maxScrollSteps, Date() < deadline, let next = advance(up: true, from: current) {
+            current = next
+            upSteps += 1
+        }
+
+        // Down to the bottom, merging.
+        var all = current
+        var downSteps = 0
+        while downSteps < maxScrollSteps, Date() < deadline, let next = advance(up: false, from: current) {
+            let merged = merge(all, next)
+            all = merged.lines
+            current = next
+            downSteps += 1
+        }
+
+        // Done: scroll back to the top, where the thread starts.
+        if downSteps > 0 {
+            var back = 0
+            while back < maxScrollSteps, let next = advance(up: true, from: current) {
+                current = next
+                back += 1
+            }
+        }
+        DebugLog.write("thread: scrolled \(upSteps) steps up and \(downSteps) down (\(wheelMoves) smooth, \(jumpMoves) jumps); "
+            + "\(visible.count) → \(all.count) lines")
+        return all
+    }
+
+    /// The message list inside the pane: the first list with several items.
+    private static func findList(in root: AXUIElement) -> AXUIElement? {
+        var queue = [root]
+        var seen = 0
+        while !queue.isEmpty, seen < 3000 {
+            let el = queue.removeFirst()
+            seen += 1
+            let kids = AX.children(el)
+            if (AX.string(el, kAXRoleAttribute) ?? "") == "AXList", kids.count >= 3 { return el }
+            queue.append(contentsOf: kids)
+        }
+        return nil
+    }
+
+    /// Lines as compared across views: a message's relative time ("32 minutes ago") may roll over while scrolling.
+    private static func normalized(_ line: String) -> String {
+        line.replacingOccurrences(of: #" \[[^\]]*\]"#, with: "", options: .regularExpression)
+    }
+
+    private static func sameView(_ a: [String], _ b: [String]) -> Bool {
+        a.count == b.count && zip(a, b).allSatisfy { normalized($0) == normalized($1) }
+    }
+
+    /// `next` appended to `all` without the lines they share: the longest tail of `all` that is also the head of `next`.
+    /// `overlapped` is false when there is none.
+    private static func merge(_ all: [String], _ next: [String]) -> (lines: [String], overlapped: Bool) {
+        let a = all.map(normalized), n = next.map(normalized)
+        var k = min(a.count, n.count)
+        while k > 0, Array(a.suffix(k)) != Array(n.prefix(k)) { k -= 1 }
+        return (all + next.dropFirst(k), k > 0)
+    }
+
+    /// One read's lines with duplicates, interface chrome and the pane's title line removed.
+    private static func cleaned(_ lines: [String]) -> [String] {
+        var out = dedupe(lines).filter { !ThreadNoise.isInterfaceLine($0) }
+        if let first = out.first, ThreadNoise.isPaneTitle(first) { out.removeFirst() }
+        return out
     }
 
     // MARK: - Collecting text
