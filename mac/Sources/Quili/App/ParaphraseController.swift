@@ -32,7 +32,9 @@ final class ParaphraseController {
         tracker.onChange = { [weak self] target in self?.targetChanged(target) }
         bubble.onClose = { [weak self] in
             guard let self else { return }
-            // Clicked before the summary finished: stop the request too, and let the fade finish the job.
+            DebugLog.write("summary bubble closed (previewing=\(self.previewing))")
+            // Clicked before the summary finished: stop the request too, and let the fade finish the job. Streamed
+            // updates that are still on their way must not bring the bubble back.
             if self.previewing { self.summaryDismissed = true; self.request?.cancel() }
             self.bubble.fadeOut()
         }
@@ -117,9 +119,10 @@ final class ParaphraseController {
             DebugLog.write("thread text to summarize:\n\(thread.text)")
 
             let result = try await ParaphraseClient.run(thread.text, settings: settings, action: action) { [weak self] partial in
-                guard let self, self.previewing else { return }
+                guard let self, self.previewing, !self.summaryDismissed else { return }
                 self.bubble.show(partial, above: anchor, tall: true, closable: true)
             }
+            guard !summaryDismissed else { return } // closed while the last of it was arriving
             TextAccess.setPasteboard(TextHygiene.slackMarkup(result))
             // The summary stays until it is closed with its ×.
             bubble.show(result, above: anchor, tall: true, closable: true)

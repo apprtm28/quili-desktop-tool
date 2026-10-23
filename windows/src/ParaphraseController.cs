@@ -153,6 +153,7 @@ namespace Quili
                         if (previewing && !cts.IsCancellationRequested) _bubble.ShowText(partial, anchor, tall: true, closable: true);
                     }));
                 previewing = false;
+                cts.Token.ThrowIfCancellationRequested(); // closed while the last of it was arriving
                 TextAccess.TrySetClipboard(TextHygiene.SlackMarkup(result));
                 // The summary stays until it is closed with its close button.
                 _bubble.ShowText(result, anchor, tall: true, closable: true);
