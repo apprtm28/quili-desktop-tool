@@ -22,25 +22,24 @@ namespace Quili.Core
         public static readonly MockServer Shared = new();
 
         public const string Summary =
-            "The team discussed the failed deploy of the order service and agreed on a rollback plan.\n" +
+            "The team handled a failed deploy of the order service and agreed on a rollback plan.\n" +
             "\n" +
-            "Timeline:\n" +
-            "- [Today at 14:10] Rina: deployed the order service release; checkout errors (5xx) started.\n" +
-            "- [Today at 14:25] Rina: rolled the release back; error rates returned to normal.\n" +
-            "- [Today at 14:40] Dani: found the root cause: a config change cut the database connection pool from 50 to 5.\n" +
-            "- [Today at 14:52] Dani: confirmed the fix is a one-line revert and will ship it behind a canary first.\n" +
+            "Key discussion:\n" +
+            "- [Today at 14:10] Rina: the order-service release caused checkout 5xx errors; she rolled it back at 14:25.\n" +
+            "- [Today at 14:40] Dani: root cause was a config change that cut the database connection pool **from 50 to 5**.\n" +
+            "\n" +
+            "Outcome:\n" +
+            "Decisions:\n" +
+            "- Ship the one-line config revert behind a **10% canary** first.\n" +
+            "Action items:\n" +
+            "- **Dani**: ship the revert to the 10% canary and report back **before full rollout**.\n" +
+            "- Rina: add an alert for connection pool saturation.\n" +
+            "Open questions:\n" +
+            "- Should the pool size be added to the pre-deploy checklist?\n" +
             "\n" +
             "Key information:\n" +
-            "- db.pool.size: 50 -> 5 (config change)\n" +
-            "- order-service release 2.14.0 (rolled back)\n" +
-            "- checkout 5xx errors, 14:10-14:25\n" +
-            "- canary: 10%\n" +
-            "- @dani, @rina\n" +
-            "\n" +
-            "Open items:\n" +
-            "- Dani: ship the config revert to 10% canary and report back before full rollout.\n" +
-            "- Rina: add an alert for connection pool saturation.\n" +
-            "- Everyone: add the pool size to the pre-deploy checklist.";
+            "- db.pool.size: 50 -> 5\n" +
+            "- order-service 2.14.0 (rolled back)";
 
         /// <summary>The canned answer for each endpoint.</summary>
         static readonly Dictionary<string, string> Replies = new()

@@ -16,6 +16,9 @@ namespace Quili.Core
             !string.IsNullOrEmpty(text)
             && (text.Contains(ObjectReplacement) || text.Contains(Replacement) || HasLoneSurrogate(text));
 
+        /// <summary>A summary's <c>**bold**</c> as Slack writes bold (<c>*bold*</c>), for the copy that goes to the clipboard.</summary>
+        public static string SlackMarkup(string text) => text.Replace("**", "*");
+
         public static string StripLoneSurrogates(string text)
         {
             if (!HasLoneSurrogate(text)) return text;

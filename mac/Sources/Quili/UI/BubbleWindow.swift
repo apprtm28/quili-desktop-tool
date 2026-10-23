@@ -44,16 +44,32 @@ private final class BubbleView: NSView {
         needsDisplay = true
     }
 
-    private static func textHeight(_ text: String, width: CGFloat) -> CGFloat {
-        ceil((text as NSString).boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude),
-                                              options: [.usesLineFragmentOrigin], attributes: attributes).height)
+    /// The text as drawn. With `markdown` (a summary) text between `**` pairs is bold and the markers are hidden; an
+    /// unclosed `**` (the summary is still streaming) stays bold to the end. Other text is drawn as it is.
+    static func attributed(_ text: String, markdown: Bool) -> NSAttributedString {
+        guard markdown, text.contains("**") else { return NSAttributedString(string: text, attributes: attributes) }
+        var bold: [NSAttributedString.Key: Any] = attributes
+        bold[.font] = NSFont.boldSystemFont(ofSize: 13)
+        let result = NSMutableAttributedString()
+        var isBold = false
+        for (index, piece) in text.components(separatedBy: "**").enumerated() {
+            if index > 0 { isBold.toggle() }
+            result.append(NSAttributedString(string: piece, attributes: isBold ? bold : attributes))
+        }
+        return result
+    }
+
+    private static func textHeight(_ text: NSAttributedString, width: CGFloat) -> CGFloat {
+        ceil(text.boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude),
+                               options: [.usesLineFragmentOrigin]).height)
     }
 
     /// The card size that fits `text`.
     static func size(for text: String, tall: Bool = false, closable: Bool = false) -> NSSize {
-        let bounding = (text as NSString).boundingRect(with: NSSize(width: maxTextWidth, height: .greatestFiniteMagnitude),
-                                                        options: [.usesLineFragmentOrigin], attributes: attributes)
-        let height = min(tall ? tallTextHeight : maxTextHeight, textHeight(text, width: ceil(bounding.width)))
+        let drawn = attributed(text, markdown: tall)
+        let bounding = drawn.boundingRect(with: NSSize(width: maxTextWidth, height: .greatestFiniteMagnitude),
+                                          options: [.usesLineFragmentOrigin])
+        let height = min(tall ? tallTextHeight : maxTextHeight, textHeight(drawn, width: ceil(bounding.width)))
         return NSSize(width: ceil(bounding.width) + padX * 2 + (closable ? closeExtra : 0), height: height + padY * 2)
     }
 
@@ -77,14 +93,14 @@ private final class BubbleView: NSView {
             Brand.muted.setStroke()
             cross.stroke()
         }
-        let full = Self.textHeight(text, width: inner.width)
+        let drawn = Self.attributed(text, markdown: tall)
+        let full = Self.textHeight(drawn, width: inner.width)
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: inner).addClip()
         // Too long to fit: keep the newest lines in view.
         scrollOffset = max(0, min(scrollOffset, max(0, full - inner.height)))
         let top = tall ? inner.minY - scrollOffset : inner.minY + min(0, inner.height - full)
-        (text as NSString).draw(with: NSRect(x: inner.minX, y: top, width: inner.width, height: full),
-                                options: [.usesLineFragmentOrigin], attributes: Self.attributes)
+        drawn.draw(with: NSRect(x: inner.minX, y: top, width: inner.width, height: full), options: [.usesLineFragmentOrigin])
         NSGraphicsContext.restoreGraphicsState()
     }
 }

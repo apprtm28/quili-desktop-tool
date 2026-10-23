@@ -120,7 +120,7 @@ final class ParaphraseController {
                 guard let self, self.previewing else { return }
                 self.bubble.show(partial, above: anchor, tall: true, closable: true)
             }
-            TextAccess.setPasteboard(result)
+            TextAccess.setPasteboard(TextHygiene.slackMarkup(result))
             // The summary stays until it is closed with its ×.
             bubble.show(result, above: anchor, tall: true, closable: true)
             Notifier.show("Thread summarized", "The summary was copied to the clipboard.")

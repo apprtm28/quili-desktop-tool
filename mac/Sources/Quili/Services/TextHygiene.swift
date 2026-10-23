@@ -11,6 +11,11 @@ enum TextHygiene {
         text.unicodeScalars.contains { $0 == objectReplacement || $0 == replacement }
     }
 
+    /// A summary's `**bold**` as Slack writes bold (`*bold*`), for the copy that goes to the clipboard.
+    static func slackMarkup(_ text: String) -> String {
+        text.replacingOccurrences(of: "**", with: "*")
+    }
+
     /// Counts only (never the text itself) for the debug log.
     static func describe(_ text: String) -> String {
         var symbols = 0, objects = 0, replacements = 0

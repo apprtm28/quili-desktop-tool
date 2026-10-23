@@ -10,25 +10,24 @@ final class MockServer: @unchecked Sendable {
     static let shared = MockServer()
 
     static let summary = """
-    The team discussed the failed deploy of the order service and agreed on a rollback plan.
+    The team handled a failed deploy of the order service and agreed on a rollback plan.
 
-    Timeline:
-    - [Today at 14:10] Rina: deployed the order service release; checkout errors (5xx) started.
-    - [Today at 14:25] Rina: rolled the release back; error rates returned to normal.
-    - [Today at 14:40] Dani: found the root cause: a config change cut the database connection pool from 50 to 5.
-    - [Today at 14:52] Dani: confirmed the fix is a one-line revert and will ship it behind a canary first.
+    Key discussion:
+    - [Today at 14:10] Rina: the order-service release caused checkout 5xx errors; she rolled it back at 14:25.
+    - [Today at 14:40] Dani: root cause was a config change that cut the database connection pool **from 50 to 5**.
+
+    Outcome:
+    Decisions:
+    - Ship the one-line config revert behind a **10% canary** first.
+    Action items:
+    - **Dani**: ship the revert to the 10% canary and report back **before full rollout**.
+    - Rina: add an alert for connection pool saturation.
+    Open questions:
+    - Should the pool size be added to the pre-deploy checklist?
 
     Key information:
-    - db.pool.size: 50 -> 5 (config change)
-    - order-service release 2.14.0 (rolled back)
-    - checkout 5xx errors, 14:10-14:25
-    - canary: 10%
-    - @dani, @rina
-
-    Open items:
-    - Dani: ship the config revert to 10% canary and report back before full rollout.
-    - Rina: add an alert for connection pool saturation.
-    - Everyone: add the pool size to the pre-deploy checklist.
+    - db.pool.size: 50 -> 5
+    - order-service 2.14.0 (rolled back)
     """
 
     /// The canned answer for each endpoint.

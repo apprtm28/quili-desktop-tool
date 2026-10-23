@@ -57,7 +57,7 @@ namespace Quili.UI
             CancelFade();
             SetClickable(closable);
             Scroller.MaxHeight = tall ? TallMaxHeightDip : MaxHeightDip;
-            Body.Text = text;
+            SetBody(text, markdown: tall);
             if (tall) Scroller.ScrollToTop();
             else Scroller.ScrollToBottom(); // long text: keep the newest lines in view
 
@@ -95,10 +95,31 @@ namespace Quili.UI
             Opacity = 1;
         }
 
+        /// <summary>
+        /// With <paramref name="markdown"/> (a summary) text between <c>**</c> pairs is bold and the markers are hidden; an
+        /// unclosed <c>**</c> (the summary is still streaming) stays bold to the end. Other text is shown as it is.
+        /// </summary>
+        void SetBody(string text, bool markdown)
+        {
+            if (!markdown || !text.Contains("**")) { Body.Text = text; return; }
+            Body.Inlines.Clear();
+            bool bold = false;
+            var pieces = text.Split(new[] { "**" }, StringSplitOptions.None);
+            for (int i = 0; i < pieces.Length; i++)
+            {
+                if (i > 0) bold = !bold;
+                if (pieces[i].Length == 0) continue;
+                var run = new System.Windows.Documents.Run(pieces[i]);
+                if (bold) run.FontWeight = FontWeights.Bold;
+                Body.Inlines.Add(run);
+            }
+        }
+
         public void HideBubble()
         {
             CancelFade();
             SetClickable(false);
+            Body.Inlines.Clear();
             Body.Text = "";
             if (IsVisible) Hide();
         }
