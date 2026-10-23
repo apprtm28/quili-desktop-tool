@@ -7,7 +7,7 @@ private final class BubblePanel: NSPanel {
 
 /// The card's content: white rounded rect with the text, showing the newest lines when it is too long.
 private final class BubbleView: NSView {
-    static let maxTextWidth: CGFloat = 320, maxTextHeight: CGFloat = 150, tallTextHeight: CGFloat = 340
+    static let maxTextWidth: CGFloat = 320, maxTextHeight: CGFloat = 150, tallTextHeight: CGFloat = 440
     static let padX: CGFloat = 12, padY: CGFloat = 9
     private static let attributes: [NSAttributedString.Key: Any] = {
         let style = NSMutableParagraphStyle()
@@ -22,6 +22,8 @@ private final class BubbleView: NSView {
     /// A closable bubble (the finished summary) reserves room for, and draws, a × at its top-right.
     var closable = false { didSet { needsDisplay = true } }
     var onClose: (() -> Void)?
+    /// How far a tall bubble whose text is longer than the card has been scrolled with the mouse wheel.
+    private var scrollOffset: CGFloat = 0
     static let closeExtra: CGFloat = 16, closeSize: CGFloat = 16
     private var closeRect: NSRect { NSRect(x: bounds.maxX - 8 - Self.closeSize, y: 8, width: Self.closeSize, height: Self.closeSize) }
 
@@ -30,6 +32,17 @@ private final class BubbleView: NSView {
         if closable, closeRect.insetBy(dx: -5, dy: -5).contains(convert(event.locationInWindow, from: nil)) { onClose?() }
     }
     override var isFlipped: Bool { true }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard tall else { return }
+        scrollOffset -= event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 1 : 8)
+        needsDisplay = true // draw() clamps the offset to the text
+    }
+
+    func resetScroll() {
+        scrollOffset = 0
+        needsDisplay = true
+    }
 
     private static func textHeight(_ text: String, width: CGFloat) -> CGFloat {
         ceil((text as NSString).boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude),
@@ -68,7 +81,8 @@ private final class BubbleView: NSView {
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: inner).addClip()
         // Too long to fit: keep the newest lines in view.
-        let top = tall ? inner.minY : inner.minY + min(0, inner.height - full)
+        scrollOffset = max(0, min(scrollOffset, max(0, full - inner.height)))
+        let top = tall ? inner.minY - scrollOffset : inner.minY + min(0, inner.height - full)
         (text as NSString).draw(with: NSRect(x: inner.minX, y: top, width: inner.width, height: full),
                                 options: [.usesLineFragmentOrigin], attributes: Self.attributes)
         NSGraphicsContext.restoreGraphicsState()
@@ -147,6 +161,7 @@ final class BubbleWindow {
 
     func hide() {
         cancelFade()
+        view.resetScroll()
         view.closable = false
         view.text = ""
         panel.orderOut(nil)

@@ -1,8 +1,6 @@
 # Quili
 
-_Formerly "Paraphrase Tool". On first launch Quili copies the settings (server URL, API key, instruction, start-at-login) from the old location, so nothing needs re-entering._
-
-Windows tray app. When you focus a text field in any app (Chrome, Slack desktop, Notepad, …) a small ✦ button appears at the field's bottom-right. Click it and the selected text, or the full text of the field when nothing is selected, is paraphrased by the paraphrase API and replaced in place (Ctrl+Z undoes it).
+A tray / menu-bar app for **Windows** and **macOS**. When you focus a text field in any app (Chrome, Slack desktop, Notepad, …) a small ✦ button appears at the field's bottom-right. Click it and the selected text, or the full text of the field when nothing is selected, is paraphrased by the paraphrase API and replaced in place (Ctrl+Z / Cmd+Z undoes it). It can also translate to English and summarize a Slack thread.
 
 ## How it works
 - **Detection:** Windows UI Automation polls the focused element (`Platform/FocusTracker`) and shows a non-activating, always-on-top overlay (`UI/OverlayWindow`) so the field keeps focus.
@@ -34,18 +32,87 @@ mac/                      native Swift menu-bar app, same structure
     UI/                   OverlayWindow, SettingsWindow
 ```
 
-## Build & run (needs the .NET 8 SDK on Windows)
-```powershell
-cd windows
-dotnet run
+## Building
+
+Both apps are built with `build.sh` scripts; there is one at the repo root and one inside each platform folder. They run on a plain `bash` (macOS, Linux/WSL, Git Bash on Windows).
+
+### What you need
+
+| To build | You need | Where it can be built |
+| --- | --- | --- |
+| **Windows app** (`Quili.exe`) | the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) | Windows, WSL/Linux or macOS (the project sets `EnableWindowsTargeting`); it can only *run* on Windows |
+| **macOS app** (`Quili.app`) | Xcode or the Command Line Tools (`xcode-select --install`), Swift 5.9+ | macOS 13 or newer only (the app targets macOS 13+; the build is universal arm64 + x86_64) |
+| Windows installer (optional) | [Inno Setup 6](https://jrsoftware.org/isinfo.php) | Windows only |
+
+### Quick start
+
+```bash
+git clone <this repo> && cd quili-desktop-tool
+
+./build.sh              # every platform this machine can build, then launch what can run here
+./build.sh windows      # only the Windows app  -> dist/windows/Quili.exe
+./build.sh mac          # only the macOS app    -> dist/mac/Quili.app
 ```
 
-## Package for install
+On a Mac, `./build.sh` builds the macOS app and also the Windows one if the .NET 8 SDK is installed. On Windows or WSL it builds the Windows app and skips macOS (it says so in the summary). Naming a platform explicitly (`windows` or `mac`) makes a failure fatal instead of skipped.
+
+### `build.sh` usage
+
+```
+./build.sh [windows|mac|all] [debug] [nolaunch]
+```
+
+| Argument | Effect |
+| --- | --- |
+| *(none)* / `all` | build every platform this machine supports; a platform that can't build here is skipped, not an error |
+| `windows` | Release publish of the Windows app: self-contained, single-file `win-x64` → `dist/windows/Quili.exe` |
+| `mac` | Release build of the macOS app: universal binary, bundled and signed → `dist/mac/Quili.app` |
+| `debug` | compile check only: nothing is packaged, killed or launched. Use it to check your changes build |
+| `nolaunch` | build, but don't start the new app afterwards |
+
+Examples:
+
+```bash
+./build.sh debug                # fast "does everything still compile?" on this machine
+./build.sh mac nolaunch         # build the Mac app without restarting it
+./build.sh windows debug        # compile-check the Windows app only
+```
+
+Notes:
+- By default a release build **stops the running Quili first** (it would lock the output file) and **launches the new one** when it can run on this machine: the `.app` on macOS, the `.exe` from WSL or Git Bash. Pass `nolaunch` to skip the launch.
+- Output goes to `dist/` (not tracked by git): `dist/windows/Quili.exe`, `dist/mac/Quili.app`. Each run replaces that platform's previous output.
+- The version comes from the `VERSION` file at the repo root and is stamped into both apps.
+- The platform scripts can also be run directly: `windows/build.sh [debug] [nolaunch]` and `mac/build.sh [nolaunch|debug]`. The root script just calls them.
+- Exit status: non-zero if nothing could be built (or, with an explicit platform, if that build failed).
+
+### Windows
+
+Prerequisite: the .NET 8 SDK (`dotnet --version` should print 8.x). On WSL/Ubuntu: `sudo apt-get install -y dotnet-sdk-8.0`.
+
+```bash
+./build.sh windows            # from the repo root (bash / WSL / Git Bash)
+cd windows && ./build.sh      # same thing
+```
 ```powershell
 cd windows
-./publish.ps1        # produces dist\windows\Quili.exe (self-contained, single file)
+dotnet run                    # run from source while developing
+./publish.ps1                 # release publish from native PowerShell -> dist\windows\Quili.exe
 ```
-Then compile `windows\installer.iss` with [Inno Setup](https://jrsoftware.org/isinfo.php) to get `dist\windows\QuiliSetup-<version>.exe`.
+
+`build.sh` in a plain Linux shell without the ICU libraries falls back to invariant globalization automatically; the build doesn't need it. To make an installer, compile `windows\installer.iss` with Inno Setup (`ISCC.exe /DAppVersion=1.0.0 windows\installer.iss`) to get `dist\windows\QuiliSetup-<version>.exe`.
+
+### macOS
+
+Prerequisite: Xcode or the Command Line Tools (`xcode-select --install`).
+
+```bash
+./build.sh mac                # from the repo root
+cd mac && ./build.sh          # same thing: build dist/mac/Quili.app and launch it
+cd mac && ./build.sh nolaunch # build only
+cd mac && ./build.sh debug    # compile check only
+```
+
+After a build, grant **System Settings → Privacy & Security → Accessibility** to Quili once; without it no fields are detected and paste is blocked. To keep that permission across rebuilds, create the stable signing certificate once with `mac/make-signing-cert.sh` (see *Signing* in the macOS section below).
 
 ## Releases
 Downloads are on the repo's **Releases** page: `Quili-Setup-vX.Y.Z.exe` (Windows installer), `Quili-vX.Y.Z-win-x64.exe` (portable) and `Quili-vX.Y.Z-macos.zip` (universal app).
@@ -58,10 +125,10 @@ git tag v$(cat VERSION) && git push origin v$(cat VERSION)
 ```
 The workflow (`.github/workflows/release.yml`) refuses a tag that doesn't match `VERSION`. It can also be run by hand from the Actions tab to just build the artifacts.
 
-The builds aren't code-signed, so first launch shows a warning: on Windows choose *More info → Run anyway* (SmartScreen); on macOS right-click the app and choose *Open*, or run `xattr -dr com.apple.quarantine Quili.app`.
+The release builds aren't code-signed, so the OS shows a warning when you open them: on Windows choose *More info → Run anyway* (SmartScreen); on macOS right-click the app and choose *Open*, or run `xattr -dr com.apple.quarantine Quili.app`.
 
 ## Summarize a Slack thread
-Open a thread in the Slack desktop app's side pane: a round green **✦** button appears just left of Slack's own "Summarize thread" button (hover it for the "Summarize thread on Quili" tooltip). Click it. Quili reads the thread text from Slack's window through the accessibility API (no Slack API, token or admin approval), sends it to `POST /api/summarize-thread` on your server, shows the summary in a bubble (it closes by itself after 5 seconds, or sooner with the × at its top-right) and copies it to the clipboard. Nothing is written to Slack.
+Open a thread in the Slack desktop app's side pane: a round green **✦** button appears just left of Slack's own "Summarize thread" button (hover it for the "Summarize thread on Quili" tooltip). Click it. Quili reads the thread text from Slack's window through the accessibility API (no Slack API, token or admin approval), sends it to `POST /api/summarize-thread` on your server, shows the summary in a bubble (a timeline plus the key details, scrollable with the mouse wheel; it stays until you close it with the × at its top-right) and copies it to the clipboard. Nothing is written to Slack.
 
 - Only what the window has rendered is read, so a very long thread may need scrolling to the top first; the oldest lines are dropped if the thread exceeds ~38,000 characters.
 - Slack's accessibility layout isn't documented and may change between releases. If it says "No thread found", the debug log (`debug.log`) records how many lines were read and the shape of the window (control types only). When you click Summarize, the thread text that is sent is also written to `debug.log` in full, so the log then holds thread content (it is cleared once it passes 1 MB). Untick **Write debug log** in Settings to stop all logging.
@@ -73,14 +140,11 @@ Open a thread in the Slack desktop app's side pane: a round green **✦** button
 - Apps running as Administrator can't be read unless this tool is also run as Administrator.
 - With nothing selected, replacing uses Ctrl+A, so the field is fully replaced (that's the intended "paraphrase everything" behavior). Select part of the text to change only that part.
 
-## Building both
-`./build.sh` (repo root) builds every platform the current machine supports: Windows always (needs the .NET 8 SDK), macOS only on a Mac. Options: `./build.sh [windows|mac|all] [debug] [nolaunch]`. On WSL/Linux the macOS build is skipped.
-
 ## macOS version (`mac/`)
 A native Swift menu-bar app with the same behavior (✦ button on the focused field, selection-only or whole-field paraphrase, same `/api/paraphrase` server). The Windows code above is WPF/UI Automation and can't run on macOS, so the Mac app is a separate implementation.
 
-- **Build (on a Mac with Xcode or the Command Line Tools):** `cd mac && ./build.sh` → `dist/mac/Quili.app` (universal arm64 + x86_64), then it launches. `./build.sh nolaunch` only builds.
-- **Permission:** on first launch grant **System Settings → Privacy & Security → Accessibility** to Quili. Without it, no fields are detected and paste is blocked.
+- **Build:** see [Building](#building) above (`cd mac && ./build.sh` → `dist/mac/Quili.app`, universal arm64 + x86_64).
+- **Permission:** grant **System Settings → Privacy & Security → Accessibility** to Quili. Without it, no fields are detected and paste is blocked.
 - **Optional permission:** **Screen Recording** lets the docked button snap to a field's visible border (the Windows version samples screen pixels for this). Without it the button uses a fixed offset below the field.
 - **Detection:** the macOS Accessibility API (`AXUIElement`) instead of UI Automation; for Chromium/Electron apps it sets `AXEnhancedUserInterface`/`AXManualAccessibility` so Chrome and Slack expose their fields.
 - **Write:** pasteboard + Cmd+A / Cmd+V. The original selection is restored before pasting. Your previous text clipboard is restored.

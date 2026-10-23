@@ -17,10 +17,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SUMMARY = """The team discussed the failed deploy of the order service and agreed on a rollback plan.
 
-- The release at 14:10 caused elevated 5xx errors on checkout; Rina rolled it back at 14:25.
-- Root cause: a config change dropped the database connection pool size from 50 to 5.
-- Dani confirmed the fix is a one-line revert and will ship it behind a canary first.
-- Monitoring showed error rates back to normal after the rollback.
+Timeline:
+- [Today at 14:10] Rina: deployed the order service release; checkout errors (5xx) started.
+- [Today at 14:25] Rina: rolled the release back; error rates returned to normal.
+- [Today at 14:40] Dani: found the root cause: a config change cut the database connection pool from 50 to 5.
+- [Today at 14:52] Dani: confirmed the fix is a one-line revert and will ship it behind a canary first.
+
+Key information:
+- db.pool.size: 50 -> 5 (config change)
+- order-service release 2.14.0 (rolled back)
+- checkout 5xx errors, 14:10-14:25
+- canary: 10%
+- @dani, @rina
 
 Open items:
 - Dani: ship the config revert to 10% canary and report back before full rollout.

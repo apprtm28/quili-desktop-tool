@@ -15,7 +15,7 @@ namespace Quili.UI
     public partial class BubbleWindow : Window
     {
         const int WS_EX_TRANSPARENT = 0x20;
-        const double GapDip = 6, MaxHeightDip = 150, TallMaxHeightDip = 340, CloseExtraDip = 16;
+        const double GapDip = 6, MaxHeightDip = 150, TallMaxHeightDip = 440, CloseExtraDip = 16;
 
         static readonly TimeSpan FadeDuration = TimeSpan.FromMilliseconds(250);
 

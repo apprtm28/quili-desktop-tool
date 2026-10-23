@@ -24,9 +24,7 @@ namespace Quili
         readonly ThreadWatcher _threadWatcher = new();
         readonly ThreadButtonWindow _threadButton = new();
         ThreadPane? _threadPane;
-        DispatcherTimer? _summaryHide; // closes the finished summary after a few seconds
         bool _summarizing, _summaryDismissed; // a summary is being made / its close button was clicked meanwhile
-        static readonly TimeSpan SummaryAutoClose = TimeSpan.FromSeconds(5);
         readonly FocusTracker _tracker = new();
         TextTarget? _current;
         CancellationTokenSource? _cts;
@@ -48,7 +46,6 @@ namespace Quili
             _tracker.TargetChanged += t => _dispatcher.BeginInvoke(() => OnTargetChanged(t));
             _bubble.CloseRequested += () =>
             {
-                _summaryHide?.Stop();
                 // Clicked before the summary finished: stop the request too, and let the fade finish the job.
                 if (_summarizing) { _summaryDismissed = true; _cts?.Cancel(); }
                 _bubble.FadeOut();
@@ -121,12 +118,6 @@ namespace Quili
             _ = SummarizeAsync(anchor, window);
         }
 
-        void HideSummary(object? sender, EventArgs e)
-        {
-            _summaryHide?.Stop();
-            _bubble.FadeOut();
-        }
-
         async Task SummarizeAsync(System.Drawing.Rectangle anchor, IntPtr window)
         {
             var action = TextAction.SummarizeThread;
@@ -138,7 +129,6 @@ namespace Quili
             DebugLog.Write("summarize clicked");
 
             using var cts = _cts = new CancellationTokenSource();
-            _summaryHide?.Stop(); // the previous summary's timer must not close this request's bubble
             _summarizing = true;
             _summaryDismissed = false;
             bool previewing = true; // late streamed updates must not re-show the bubble after the request ended
@@ -164,15 +154,10 @@ namespace Quili
                     }));
                 previewing = false;
                 TextAccess.TrySetClipboard(result);
-                // The close button stays; the finished summary also closes by itself after a few seconds.
+                // The summary stays until it is closed with its close button.
                 _bubble.ShowText(result, anchor, tall: true, closable: true);
                 keepBubble = true;
                 _notify("Thread summarized", "The summary was copied to the clipboard.", NoticeLevel.Info);
-
-                _summaryHide ??= new DispatcherTimer { Interval = SummaryAutoClose };
-                _summaryHide.Tick -= HideSummary;
-                _summaryHide.Tick += HideSummary;
-                _summaryHide.Start();
             }
             catch (OperationCanceledException) when (cts.IsCancellationRequested)
             {
@@ -199,7 +184,6 @@ namespace Quili
             if (target == null || _overlay.IsBusy || _cts != null) return;
 
             _overlay.SetBusy(true);
-            _summaryHide?.Stop(); // a summary's timer must not close this request's preview bubble
             using var cts = _cts = new CancellationTokenSource();
             _writing = false;
             var targetWindow = Native.GetForegroundWindow();

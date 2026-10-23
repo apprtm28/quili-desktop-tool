@@ -11,9 +11,7 @@ final class ParaphraseController {
     private let threadWatcher = ThreadWatcher()
     private let threadButton = ThreadButtonWindow()
     private var threadPane: ThreadPane?
-    private var summaryHideTask: Task<Void, Never>? // closes the finished summary after a few seconds
     private var summaryDismissed = false // the × was clicked while the summary was still being made
-    private static let summaryAutoCloseSeconds: UInt64 = 5
     private var current: TextTarget?
     private var request: Task<Void, Never>?
     private var previewing = false // late streamed updates must not re-show the bubble after the request ended
@@ -34,7 +32,6 @@ final class ParaphraseController {
         tracker.onChange = { [weak self] target in self?.targetChanged(target) }
         bubble.onClose = { [weak self] in
             guard let self else { return }
-            self.summaryHideTask?.cancel()
             // Clicked before the summary finished: stop the request too, and let the fade finish the job.
             if self.previewing { self.summaryDismissed = true; self.request?.cancel() }
             self.bubble.fadeOut()
@@ -90,7 +87,6 @@ final class ParaphraseController {
 
     private func runSummary(in app: NSRunningApplication?, below anchor: NSRect) async {
         defer { request = nil }
-        summaryHideTask?.cancel() // the previous summary's timer must not close this request's bubble
         summaryDismissed = false
         let action = TextAction.summarizeThread
         guard AXIsProcessTrusted() else {
@@ -125,13 +121,9 @@ final class ParaphraseController {
                 self.bubble.show(partial, above: anchor, tall: true, closable: true)
             }
             TextAccess.setPasteboard(result)
-            // The × stays; the finished summary also closes by itself after a few seconds.
+            // The summary stays until it is closed with its ×.
             bubble.show(result, above: anchor, tall: true, closable: true)
             Notifier.show("Thread summarized", "The summary was copied to the clipboard.")
-            summaryHideTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: Self.summaryAutoCloseSeconds * 1_000_000_000)
-                if !Task.isCancelled { self?.bubble.fadeOut() }
-            }
         } catch is CancellationError {
             if !summaryDismissed { bubble.hide() } // a dismissed bubble is already fading out
         } catch let error as URLError where error.code == .cancelled {
@@ -147,7 +139,6 @@ final class ParaphraseController {
         DebugLog.write("\(action) clicked (target=\(current == nil ? "none" : "set"), busy=\(overlay.isBusy))")
         // Declared first so every exit, including the guard below, frees the controller for the next click.
         defer { request = nil }
-        summaryHideTask?.cancel() // a summary's timer must not close this request's preview bubble
         guard let target = current, !overlay.isBusy else { return }
         overlay.setBusy(true)
         writing = false
