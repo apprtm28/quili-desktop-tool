@@ -135,6 +135,20 @@ Open a thread in the Slack desktop app's side pane: a round green **✦** button
 - **Server down?** Tick **Mock server (offline)** in Settings and press Save: Quili starts a tiny built-in server on `127.0.0.1` and sends every action (paraphrase, translate and summarize) to it; it always answers with fixed sample text. Untick it and Save to stop the mock and go back to the real server. `tools/mock_server.py` is the same mock as a standalone script for other clients.
 - Slack must be exposing its accessibility tree: on Windows start it with `--force-renderer-accessibility` if the first attempt finds nothing.
 
+## Hermes (personal macOS fork)
+
+This fork routes Quili's AI through tools on your own machines. Decisions and status: [`docs/hermes/decisions.md`](docs/hermes/decisions.md), [`docs/hermes/plan.md`](docs/hermes/plan.md).
+
+- **Paraphrase / Translate** run through `opencode run` on the Mac (Settings → *Paraphrase with opencode on this Mac*, model `opencode-go/deepseek-v4.1-flash` by default). No server or API key needed.
+- **Summarize** (the ✦ next to Slack's *Summarize thread*) goes to the Hermes `work` profile over SSH (`ssh apprtm hermes -p work chat …`). The bubble keeps one Hermes session per thread: reopen the thread later and the conversation is still there, with **Refresh** when new replies arrived. Type in **Ask Hermes…** to ask follow-ups (Return sends, Esc gives focus back to Slack).
+- **Coverage:** when Quili can't confirm it read the whole thread (oldest messages left out, start not reached, fewer replies than Slack's count) an amber line says so, with **Retry read**.
+- **Ranges from the main channel:** hover a message, click **Start here**, hover another, click **End here**. Quili scrolls Slack between them, then lists the messages to untick before **Summarize with Hermes**.
+- **Save to work context:** Hermes drafts a note, you edit it in the bubble and **Approve and save**; Quili writes it over SSH to `~/ObsidianVault/03-resources/quili-work-context/` on the Hermes host (never overwriting). Blocked on an incomplete read unless you choose **Save anyway**.
+- **Any app (Gmail, Chrome…):** select text and press **⌃⌥H** (or menu bar → *Ask Hermes about selection*). Hermes summarizes it in the bubble; then Ask or **Save to work context** as above. Everything selected goes to the `work` profile.
+- **Hermes unreachable:** the bubble offers **Retry** or **Summarize directly this once** (opencode, not saved to Hermes).
+- Hermes turns run with `-t file,skills,session_search,clarify,todo`; if Hermes writes a file anyway, the bubble shows a red warning.
+- Build on a Mac without Xcode: `mac/build-swiftc.sh` (arm64, works around broken Command Line Tools).
+
 ## Notes / limitations
 - Chrome and Electron expose UI Automation only when an accessibility client is detected; the tool triggers this automatically, but the first focus after launching Chrome/Slack may need a click or two. If Slack doesn't show the button, start it with `--force-renderer-accessibility`.
 - Apps running as Administrator can't be read unless this tool is also run as Administrator.

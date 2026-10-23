@@ -226,12 +226,20 @@ final class SettingsWindow: NSObject, NSTextViewDelegate {
     private let startup = CheckRow(title: "Start at login")
     private let mock = CheckRow(title: "Mock server (offline)")
     private let logging = CheckRow(title: "Write debug log")
+    private let opencode = CheckRow(title: "Paraphrase with opencode on this Mac")
+    private let opencodeModel = NSTextField()
+    private let hermesHost = NSTextField()
+    private let hermesProfile = NSTextField()
+    private let hermesPath = NSTextField()
+    private let vaultFolder = NSTextField()
     private var revealed = false
 
     init(settings: Settings) {
         self.settings = settings
 
-        let width: CGFloat = 520, pad: CGFloat = 28, inner: CGFloat = 464, labelX: CGFloat = 76, fieldWidth: CGFloat = 416
+        // Two columns: the original settings on the left, the AI engine and Hermes (macOS-only fork) on the right.
+        let width: CGFloat = 900, pad: CGFloat = 28, inner: CGFloat = 464, labelX: CGFloat = 76, fieldWidth: CGFloat = 416
+        let rightX: CGFloat = 520, rightWidth = width - 520 - pad
 
         func label(_ text: String, size: CGFloat, weight: NSFont.Weight = .regular, color: NSColor) -> NSTextField {
             let l = NSTextField(labelWithString: text)
@@ -376,8 +384,54 @@ final class SettingsWindow: NSObject, NSTextViewDelegate {
         [gitBadge, repoLabel, link, openIcon].forEach(content.addSubview)
         y += 34 + 22
 
+        // Right column: AI engine and Hermes.
+        var ry: CGFloat = 90 + 24
+        func rightSection(_ path: NSBezierPath, _ text: String) {
+            let badge = BadgeView(path)
+            badge.frame.origin = NSPoint(x: rightX, y: ry)
+            let l = label(text, size: 17, weight: .semibold, color: Brand.ink)
+            l.setFrameOrigin(NSPoint(x: rightX + 48, y: ry + (34 - l.frame.height) / 2))
+            content.addSubview(badge); content.addSubview(l)
+            ry += 34 + 10
+        }
+        func smallField(_ field: NSTextField, title: String, x: CGFloat, width: CGFloat, top: CGFloat) {
+            let l = label(title, size: 13, color: Brand.muted)
+            l.setFrameOrigin(NSPoint(x: x + 4, y: top))
+            content.addSubview(l)
+            let box = frame(x: x, y: top + 20, width: width, height: 40)
+            bare(field)
+            field.font = .systemFont(ofSize: 14)
+            field.frame = NSRect(x: 16, y: (40 - 19) / 2, width: width - 32, height: 19)
+            box.addSubview(field)
+        }
+        rightSection(Glyph.sparkle, "AI engine")
+        opencode.frame.origin = NSPoint(x: rightX + 2, y: ry)
+        content.addSubview(opencode)
+        ry += 26 + 12
+        smallField(opencodeModel, title: "opencode model (paraphrase, translate)", x: rightX, width: rightWidth, top: ry)
+        ry += 20 + 40 + 24
+
+        rightSection(Glyph.link, "Hermes (work)")
+        let hermesHint = NSTextField(wrappingLabelWithString:
+            "Thread summaries, questions and notes go through Hermes over SSH. Approved notes are saved in the folder below on that host.")
+        hermesHint.font = .systemFont(ofSize: 13)
+        hermesHint.textColor = Brand.muted
+        let hermesHintHeight = ceil(hermesHint.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: rightWidth, height: 1000)).height ?? 34)
+        hermesHint.frame = NSRect(x: rightX, y: ry, width: rightWidth, height: hermesHintHeight)
+        content.addSubview(hermesHint)
+        ry += hermesHintHeight + 12
+        let half = (rightWidth - 12) / 2
+        smallField(hermesHost, title: "SSH host", x: rightX, width: half, top: ry)
+        smallField(hermesProfile, title: "Profile", x: rightX + half + 12, width: half, top: ry)
+        ry += 20 + 40 + 14
+        smallField(hermesPath, title: "Hermes path on host", x: rightX, width: rightWidth, top: ry)
+        ry += 20 + 40 + 14
+        smallField(vaultFolder, title: "Notes folder on host", x: rightX, width: rightWidth, top: ry)
+        ry += 20 + 40 + 22
+        y = max(y, ry)
+
         // Divider and footer
-        let divider = NSView(frame: NSRect(x: pad, y: y, width: inner, height: 1))
+        let divider = NSView(frame: NSRect(x: pad, y: y, width: width - 2 * pad, height: 1))
         divider.wantsLayer = true
         divider.layer?.backgroundColor = Brand.hex(0xE6ECE8).cgColor
         content.addSubview(divider)
@@ -389,8 +443,8 @@ final class SettingsWindow: NSObject, NSTextViewDelegate {
         let cancelButton = PillButton(title: "Cancel", primary: false, size: NSSize(width: 108, height: 46))
         let saveButton = PillButton(title: "Save", primary: true, size: NSSize(width: 150, height: 46))
         let glow = PillButton.glow
-        cancelButton.frame.origin = NSPoint(x: pad + inner - 108 - glow, y: y - glow)
-        saveButton.frame.origin = NSPoint(x: pad + inner - 108 - 12 - 150 - glow, y: y - glow)
+        cancelButton.frame.origin = NSPoint(x: width - pad - 108 - glow, y: y - glow)
+        saveButton.frame.origin = NSPoint(x: width - pad - 108 - 12 - 150 - glow, y: y - glow)
         content.addSubview(saveButton); content.addSubview(cancelButton)
         y += 46 + 22
 
@@ -429,7 +483,10 @@ final class SettingsWindow: NSObject, NSTextViewDelegate {
         saveButton.onClick = { [weak self] in self?.save() }
         eye.onClick = { [weak self] in self?.toggleKey() }
         link.onClick = { NSWorkspace.shared.open(URL(string: AppInfo.repoUrl)!) }
-        for field in [server, keySecure, keyPlain] { field.target = self; field.action = #selector(saveFromReturn) }
+        for field in [server, keySecure, keyPlain, opencodeModel, hermesHost, hermesProfile, hermesPath, vaultFolder] {
+            field.target = self
+            field.action = #selector(saveFromReturn)
+        }
         styleView.delegate = self
     }
 
@@ -443,6 +500,12 @@ final class SettingsWindow: NSObject, NSTextViewDelegate {
         startup.checked = settings.runAtStartup
         mock.checked = settings.mockMode
         logging.checked = settings.loggingEnabled
+        opencode.checked = settings.useOpencode
+        opencodeModel.stringValue = settings.opencodeModel
+        hermesHost.stringValue = settings.hermesHost
+        hermesProfile.stringValue = settings.hermesProfile
+        hermesPath.stringValue = settings.hermesPath
+        vaultFolder.stringValue = settings.vaultFolder
         window.center()
         // Opened from the overlay, the app isn't frontmost: raise the window above everything and focus it.
         window.level = .floating
@@ -477,6 +540,12 @@ final class SettingsWindow: NSObject, NSTextViewDelegate {
         settings.serverUrl = ParaphraseClient.normalize(server.stringValue)
         settings.style = styleView.string.trimmingCharacters(in: .whitespacesAndNewlines) // empty falls back to the default
         settings.runAtStartup = startup.checked
+        settings.useOpencode = opencode.checked
+        settings.opencodeModel = opencodeModel.stringValue
+        settings.hermesHost = hermesHost.stringValue
+        settings.hermesProfile = hermesProfile.stringValue
+        settings.hermesPath = hermesPath.stringValue
+        settings.vaultFolder = vaultFolder.stringValue
         applyMock(mock.checked)
         applyLogging(logging.checked)
         window.close()

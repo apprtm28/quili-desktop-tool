@@ -76,6 +76,56 @@ final class Settings {
         set { defaults.set(newValue, forKey: "mockMode") }
     }
 
+    // MARK: - AI engine and Hermes (macOS-only fork, docs/hermes/decisions.md)
+
+    static let defaultOpencodeModel = "opencode-go/deepseek-v4.1-flash"
+    static let defaultHermesHost = "apprtm", defaultHermesPath = "~/.local/bin/hermes", defaultHermesProfile = "work"
+    static let defaultVaultFolder = "~/ObsidianVault/03-resources/quili-work-context"
+
+    /// Paraphrase and translate run through `opencode run` on this Mac instead of the server URL (Q13). On by default.
+    var useOpencode: Bool {
+        get { defaults.object(forKey: "useOpencode") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "useOpencode") }
+    }
+
+    var opencodeModel: String {
+        get { nonEmpty("opencodeModel") ?? Settings.defaultOpencodeModel }
+        set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "opencodeModel") }
+    }
+
+    /// The ssh destination that runs Hermes (an alias from ~/.ssh/config works).
+    var hermesHost: String {
+        get { nonEmpty("hermesHost") ?? Settings.defaultHermesHost }
+        set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "hermesHost") }
+    }
+
+    var hermesPath: String {
+        get { nonEmpty("hermesPath") ?? Settings.defaultHermesPath }
+        set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "hermesPath") }
+    }
+
+    /// Slack data only goes through this profile (S2H-D6).
+    var hermesProfile: String {
+        get { nonEmpty("hermesProfile") ?? Settings.defaultHermesProfile }
+        set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "hermesProfile") }
+    }
+
+    /// The folder on the Hermes host that approved notes are written to.
+    var vaultFolder: String {
+        get { nonEmpty("vaultFolder") ?? Settings.defaultVaultFolder }
+        set {
+            var value = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            while value.hasSuffix("/") { value.removeLast() }
+            defaults.set(value, forKey: "vaultFolder")
+        }
+    }
+
+    private func nonEmpty(_ key: String) -> String? {
+        guard let value = defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty
+        else { return nil }
+        return value
+    }
+
     var runAtStartup: Bool {
         get { SMAppService.mainApp.status == .enabled }
         set {

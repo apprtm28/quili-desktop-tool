@@ -36,8 +36,11 @@ enum ParaphraseClient {
                     onText: (@MainActor (String) -> Void)? = nil) async throws -> String {
         let apiKey = settings.apiKey
         // With the mock toggle on, every action is answered by the built-in mock, which needs neither a server URL
-        // nor an API key.
+        // nor an API key. Otherwise opencode on this Mac answers when it is chosen in Settings (macOS-only fork).
         let mocked = settings.mockMode
+        if !mocked, settings.useOpencode {
+            return try await OpencodeClient.run(text, action: action, settings: settings, onText: onText)
+        }
         let server: String
         if mocked {
             do { server = try await MockServer.shared.start() }

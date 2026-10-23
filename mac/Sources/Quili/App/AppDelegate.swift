@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 
 /// Owns the app lifecycle and the menu-bar UI; the paraphrase behavior lives in `ParaphraseController`.
 @MainActor
@@ -8,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var controller = ParaphraseController(settings: settings)
     private lazy var settingsWindow = SettingsWindow(settings: settings)
     private var statusItem: NSStatusItem?
+    private var selectionHotKey: HotKey?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // One instance at a time (the Windows app holds a named mutex for this).
@@ -28,8 +30,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         controller.onOpenSettings = { [weak self] in self?.openSettings() }
         controller.start()
+        // ⌃⌥H: ask Hermes about the selected text in any app (macOS-only fork).
+        selectionHotKey = HotKey(keyCode: UInt32(kVK_ANSI_H), modifiers: UInt32(controlKey | optionKey)) { [weak self] in
+            self?.controller.askHermesAboutSelection()
+        }
 
-        if settings.apiKey.isEmpty || settings.serverUrl.isEmpty { settingsWindow.show() }
+        if !settings.useOpencode, settings.apiKey.isEmpty || settings.serverUrl.isEmpty { settingsWindow.show() }
     }
 
     // MARK: - Menus
@@ -45,6 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         item.button?.toolTip = "Quili \(AppInfo.version)"
         let menu = NSMenu()
+        let ask = menu.addItem(withTitle: "Ask Hermes about selection", action: #selector(askAboutSelection), keyEquivalent: "h")
+        ask.keyEquivalentModifierMask = [.control, .option]
+        ask.target = self
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         let pause = menu.addItem(withTitle: "Pause", action: #selector(togglePause(_:)), keyEquivalent: "")
         pause.target = self
@@ -69,6 +78,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() { settingsWindow.show() }
+
+    /// From the menu the frontmost app is still the one with the selection (an accessory app doesn't activate).
+    @objc private func askAboutSelection() { controller.askHermesAboutSelection() }
 
     @objc private func togglePause(_ sender: NSMenuItem) {
         controller.paused.toggle()

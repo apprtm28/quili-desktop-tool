@@ -5,6 +5,39 @@ import ApplicationServices
 struct ThreadText {
     let text: String
     let truncated: Bool   // older lines were dropped to stay under the server's size cap
+    let coverage: ReadCoverage
+    /// The channel or conversation name from Slack's window title ("" when it can't be read).
+    let channel: String
+    /// The messages as sent, one `{{ … }}` string each.
+    let messages: [String]
+}
+
+/// What a read knows about its own completeness (Q8). The bubble shows `warning` when something is off.
+struct ReadCoverage {
+    var messages = 0
+    var droppedOldest = 0
+    /// The scroll pass reached the top of the pane (or nothing needed scrolling).
+    var reachedStart = true
+    /// The step or time budget ran out while the pane could still move.
+    var stoppedEarly = false
+    /// Slack's own "N replies" count, when it was readable.
+    var expectedReplies: Int?
+
+    /// Replies read: every message but the one that started the thread.
+    var repliesRead: Int { max(0, messages - 1) }
+
+    var isClean: Bool { warning == nil }
+
+    var warning: String? {
+        var parts: [String] = []
+        if let expected = expectedReplies, repliesRead < expected { parts.append("Read \(repliesRead) of \(expected) replies") }
+        if droppedOldest > 0 { parts.append("oldest \(droppedOldest) message\(droppedOldest == 1 ? "" : "s") left out (too long)") }
+        if !reachedStart { parts.append("couldn't reach the start") }
+        else if stoppedEarly { parts.append("stopped reading before the end") }
+        guard !parts.isEmpty else { return nil }
+        let text = parts.joined(separator: "; ")
+        return text.prefix(1).uppercased() + text.dropFirst()
+    }
 }
 
 /// Reads the thread pane of the Slack desktop app (an Electron app, so its web content is exposed as an AX tree
@@ -82,10 +115,11 @@ enum ThreadReader {
             DebugLog.write("thread: no thread pane found; structure \(structure(of: window))")
             return nil
         }
+        var coverage = ReadCoverage(expectedReplies: replyCount(in: lines))
         lines = cleaned(lines)
         DebugLog.write("thread: read \(lines.count) lines via \(how)")
         if let root, !lines.isEmpty {
-            lines = gatherByScrolling(root: root, pid: pid, skipping: focused, visible: lines)
+            lines = gatherByScrolling(root: root, pid: pid, skipping: focused, visible: lines, coverage: &coverage)
         }
         if let root, DebugLog.enabled { DebugLog.write("thread structure (roles and text lengths only):\n\(outline(of: root))") }
         guard !lines.isEmpty else { return nil }
@@ -99,7 +133,36 @@ enum ThreadReader {
             dropped += 1
         }
         if dropped > 0 { DebugLog.write("thread: dropped the oldest \(dropped) messages to fit \(maxChars) chars") }
-        return ThreadText(text: messages[dropped...].joined(separator: "\n\n"), truncated: dropped > 0)
+        coverage.messages = messages.count
+        coverage.droppedOldest = dropped
+        DebugLog.write("thread: coverage \(coverage.messages) messages, expected replies \(coverage.expectedReplies.map(String.init) ?? "?"), "
+            + "start \(coverage.reachedStart), stopped early \(coverage.stoppedEarly)")
+        let kept = Array(messages[dropped...])
+        return ThreadText(text: kept.joined(separator: "\n\n"), truncated: dropped > 0, coverage: coverage,
+                          channel: channelName(window), messages: kept)
+    }
+
+    /// Slack's "N replies" divider ("4 replies", "1 reply"), read before the line is dropped as interface noise.
+    private static func replyCount(in lines: [String]) -> Int? {
+        for line in lines {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard let range = t.range(of: #"^[0-9][0-9,.]*\s+repl(y|ies)\b"#, options: .regularExpression) else { continue }
+            return Int(t[range].filter(\.isNumber))
+        }
+        return nil
+    }
+
+    /// The conversation name from Slack's window title, "general (Channel) - Acme - Slack" → "general".
+    static func channelName(_ window: AXUIElement) -> String {
+        var parts = (AX.string(window, kAXTitleAttribute) ?? "").components(separatedBy: " - ")
+        if parts.last == "Slack" { parts.removeLast() }
+        if parts.count >= 2 { parts.removeLast() } // the workspace
+        var channel = parts.joined(separator: " - ")
+        if let paren = channel.range(of: #"\s*\((Channel|DM|Private channel)\)\s*$"#, options: .regularExpression) {
+            channel.removeSubrange(paren)
+        }
+        return channel.replacingOccurrences(of: #"^[*!]\s*"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
     }
 
     /// An editable text field: where the user types a message, never part of the conversation.
@@ -302,8 +365,9 @@ enum ThreadReader {
     /// works but jumps. Any problem (no scrolling happens, no overlap) just leaves what was read. The pane always goes
     /// to the top first and is back at the top when done.
     private static func gatherByScrolling(root: AXUIElement, pid: pid_t, skipping skip: AXUIElement?,
-                                          visible: [String]) -> [String] {
+                                          visible: [String], coverage: inout ReadCoverage) -> [String] {
         guard let frame = AX.frame(root), frame.height > 200 else { return visible }
+        var expectedReplies = coverage.expectedReplies
         let point = CGPoint(x: frame.midX, y: frame.midY)
         let deadline = Date().addingTimeInterval(scrollTimeLimit)
         let list = findList(in: root)
@@ -335,7 +399,9 @@ enum ThreadReader {
             var previous: [String]?
             for _ in 0..<10 {
                 Thread.sleep(forTimeInterval: 0.12)
-                let view = cleaned(collect(root, skipping: skip))
+                let raw = collect(root, skipping: skip)
+                if let count = replyCount(in: raw) { expectedReplies = max(expectedReplies ?? 0, count) }
+                let view = cleaned(raw)
                 if let previous, sameView(previous, view) { return view }
                 previous = view
             }
@@ -386,7 +452,9 @@ enum ThreadReader {
         // Up to the top.
         var current = visible
         var upSteps = 0
-        while upSteps < maxScrollSteps, Date() < deadline, let next = advance(up: true, from: current) {
+        var reachedTop = false
+        while upSteps < maxScrollSteps, Date() < deadline {
+            guard let next = advance(up: true, from: current) else { reachedTop = true; break }
             current = next
             upSteps += 1
         }
@@ -394,12 +462,17 @@ enum ThreadReader {
         // Down to the bottom, merging.
         var all = current
         var downSteps = 0
-        while downSteps < maxScrollSteps, Date() < deadline, let next = advance(up: false, from: current) {
+        var reachedBottom = false
+        while downSteps < maxScrollSteps, Date() < deadline {
+            guard let next = advance(up: false, from: current) else { reachedBottom = true; break }
             let merged = merge(all, next)
             all = merged.lines
             current = next
             downSteps += 1
         }
+        coverage.reachedStart = reachedTop
+        coverage.stoppedEarly = !reachedTop || !reachedBottom
+        coverage.expectedReplies = expectedReplies
 
         // Done: scroll back to the top, where the thread starts. Big wheel moves while the items still shift, then the
         // normal step to be sure of the top.

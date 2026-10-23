@@ -91,8 +91,8 @@ enum TextAccess {
         String(s.filter { $0.isLetter || $0.isNumber }.prefix(max)).lowercased()
     }
 
-    /// Cmd+C and return what landed on the pasteboard (empty if nothing was selected).
-    private static func copySelection() async -> String {
+    /// Cmd+C and return what landed on the pasteboard (empty if nothing was selected); the pasteboard is restored.
+    static func copySelection() async -> String {
         let pb = NSPasteboard.general
         let backup = pb.string(forType: .string)
         pb.clearContents()
@@ -119,6 +119,17 @@ enum TextAccess {
             e?.flags = .maskCommand
             e?.post(tap: .cghidEventTap)
         }
+    }
+
+    /// The text selected in the frontmost app, for "Ask Hermes about selection": the Accessibility selection when the
+    /// app reports one (and it isn't damaged around emoji), otherwise Cmd+C.
+    static func selectedText(in app: NSRunningApplication) async -> String {
+        let element = AXUIElementCreateApplication(app.processIdentifier)
+        if let focused = AX.focusedElement(ofApp: element), let sel = AX.string(focused, kAXSelectedTextAttribute),
+           !isBlank(sel), !TextHygiene.isUnreliable(sel) {
+            return normalize(sel)
+        }
+        return normalize(await copySelection())
     }
 
     private static func isBlank(_ s: String) -> Bool { s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }

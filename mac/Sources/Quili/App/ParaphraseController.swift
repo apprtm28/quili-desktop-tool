@@ -11,7 +11,14 @@ final class ParaphraseController {
     private let threadWatcher = ThreadWatcher()
     private let threadButton = ThreadButtonWindow()
     private var threadPane: ThreadPane?
-    private var summaryDismissed = false // the × was clicked while the summary was still being made
+    /// Thread summaries, questions and work-context notes go through Hermes (macOS-only fork, docs/hermes).
+    private let hermes: HermesController
+    /// Range chips on Slack's main channel (Q4): the hovered message, the marked start, and a running collection.
+    private let channelWatcher = ChannelWatcher()
+    private let chip = ChipWindow()
+    private var hovered: ChannelHover?
+    private var rangeStart: ChannelHover?
+    private var collecting = false
     private var current: TextTarget?
     private var request: Task<Void, Never>?
     private var previewing = false // late streamed updates must not re-show the bubble after the request ended
@@ -19,6 +26,7 @@ final class ParaphraseController {
 
     init(settings: Settings) {
         self.settings = settings
+        hermes = HermesController(settings: settings)
         overlay.onAction = { [weak self] action in
             guard let self, self.request == nil, self.current != nil, !self.overlay.isBusy else { return }
             self.request = Task { await self.run(action) }
@@ -30,18 +38,18 @@ final class ParaphraseController {
             self.request?.cancel()
         }
         tracker.onChange = { [weak self] target in self?.targetChanged(target) }
-        bubble.onClose = { [weak self] in
-            guard let self else { return }
-            DebugLog.write("summary bubble closed (previewing=\(self.previewing))")
-            // Clicked before the summary finished: stop the request too, and let the fade finish the job. Streamed
-            // updates that are still on their way must not bring the bubble back.
-            if self.previewing { self.summaryDismissed = true; self.request?.cancel() }
-            self.bubble.fadeOut()
-        }
         threadWatcher.onChange = { [weak self] pane in self?.threadPaneChanged(pane) }
         threadButton.onClick = { [weak self] in
             guard let self, let pane = self.threadPane else { return }
             self.summarizeThread(in: pane.app, below: self.threadButton.frame)
+        }
+        channelWatcher.onChange = { [weak self] hover in self?.channelHoverChanged(hover) }
+        chip.onClick = { [weak self] in self?.chipClicked() }
+        chip.onClose = { [weak self] in
+            guard let self, !self.collecting else { return }
+            self.rangeStart = nil
+            DebugLog.write("range: start unmarked")
+            self.channelHoverChanged(self.hovered)
         }
     }
 
@@ -51,6 +59,7 @@ final class ParaphraseController {
     func start() {
         tracker.start()
         threadWatcher.start()
+        channelWatcher.start()
     }
 
     var paused: Bool {
@@ -58,7 +67,8 @@ final class ParaphraseController {
         set {
             tracker.paused = newValue
             threadWatcher.paused = newValue
-            if newValue { overlay.hide(); bubble.hide(); threadButton.hide() }
+            channelWatcher.paused = newValue
+            if newValue { overlay.hide(); bubble.hide(); threadButton.hide(); hermes.hide(); chip.hide(); rangeStart = nil }
         }
     }
 
@@ -71,6 +81,102 @@ final class ParaphraseController {
         threadButton.show(besideButton: pane.frame)
     }
 
+    // MARK: - Ask Hermes about the selection (⌃⌥H)
+
+    /// Sends the text selected in the frontmost app (an email in Gmail, a page in Chrome…) to Hermes `work`, in the
+    /// conversation bubble near the pointer.
+    func askHermesAboutSelection() {
+        guard AXIsProcessTrusted() else {
+            Notifier.show("Accessibility permission needed",
+                          "Allow Quili in System Settings → Privacy & Security → Accessibility.")
+            return
+        }
+        guard let app = NSWorkspace.shared.frontmostApplication, app != NSRunningApplication.current else { return }
+        let mouse = NSEvent.mouseLocation
+        let anchor = NSRect(x: mouse.x + 200, y: mouse.y - 4, width: 1, height: 8) // the bubble's right edge near the pointer
+        Task {
+            // Let go of ⌃⌥ first, so the copy isn't read as ⌃⌥⌘C.
+            for _ in 0..<25 where !CGEventSource.flagsState(.combinedSessionState).intersection([.maskControl, .maskAlternate]).isEmpty {
+                await Pause.milliseconds(20)
+            }
+            let text = await TextAccess.selectedText(in: app)
+            guard text.count >= 3 else {
+                Notifier.show("Nothing selected", "Select some text first, then press ⌃⌥H.")
+                return
+            }
+            let window = AXUIElementCreateApplication(app.processIdentifier)
+            let title = (AX.attr(window, kAXFocusedWindowAttribute).map { $0 as! AXUIElement })
+                .flatMap { AX.string($0, kAXTitleAttribute) } ?? ""
+            let source = [app.localizedName ?? "App", title.isEmpty ? nil : title].compactMap { $0 }.joined(separator: " – ")
+            DebugLog.write("selection: \(text.count) chars from \(app.bundleIdentifier ?? "?")")
+            self.hermes.askAboutSelection(text, source: String(source.prefix(120)), near: anchor)
+        }
+    }
+
+    // MARK: - Range chips
+
+    private func channelHoverChanged(_ hover: ChannelHover?) {
+        if collecting { return }
+        hovered = hover
+        // A start marked in another conversation no longer applies.
+        if let start = rangeStart, let hover, hover.channel != start.channel {
+            DebugLog.write("range: start cleared (conversation changed)")
+            rangeStart = nil
+        }
+        guard let hover else { chip.hide(); channelWatcher.chipFrame = .null; return }
+        let label: String, marked: Bool
+        if let start = rangeStart {
+            (label, marked) = start.key == hover.key ? ("Only this one", true) : ("End here", false)
+        } else {
+            (label, marked) = ("Start here", false)
+        }
+        channelWatcher.chipFrame = chip.show(label, marked: marked, onRow: hover.frame)
+    }
+
+    private func chipClicked() {
+        guard let hover = hovered, !collecting else { return }
+        guard let start = rangeStart else {
+            rangeStart = hover
+            DebugLog.write("range: start marked")
+            channelHoverChanged(hover)
+            return
+        }
+        if start.key == hover.key {
+            // Just this message: nothing to scroll for.
+            rangeStart = nil
+            chip.hide()
+            channelWatcher.chipFrame = .null
+            DebugLog.write("range: single message")
+            let m = hover.message
+            hermes.pickRange(messages: [m.formatted], headers: [("\(m.author) · \(m.time)", m.text.isEmpty ? "(no text)" : m.text)],
+                             channel: hover.channel, coverage: ReadCoverage(messages: 1), near: chip.frame)
+            return
+        }
+        collect(from: start, to: hover)
+    }
+
+    /// Scrolls Slack between the two marked messages, reads them, and opens the pick bubble.
+    private func collect(from start: ChannelHover, to end: ChannelHover) {
+        collecting = true
+        channelWatcher.chipFrame = chip.show("Collecting…", marked: true, onRow: end.frame)
+        let anchor = chip.frame
+        DebugLog.write("range: collecting")
+        Task {
+            let range = await Task.detached { RangeCollector.collect(pid: end.pid, startKey: start.key, endKey: end.key) }.value
+            self.collecting = false
+            self.rangeStart = nil
+            self.chip.hide()
+            self.channelWatcher.chipFrame = .null
+            guard let range, !range.messages.isEmpty else {
+                Notifier.show("Couldn't collect the messages", "Keep both messages in the same conversation and try again.")
+                return
+            }
+            let headers = range.messages.map { m in ("\(m.author) · \(m.time)", m.text.isEmpty ? "(no text)" : m.text) }
+            self.hermes.pickRange(messages: range.messages.map(\.formatted), headers: headers, channel: end.channel,
+                                  coverage: range.coverage, near: anchor)
+        }
+    }
+
     private func targetChanged(_ target: TextTarget?) {
         // Keep the button where it is while a request is running; the result is validated afterwards.
         if overlay.isBusy { return }
@@ -80,17 +186,9 @@ final class ParaphraseController {
         if let target { overlay.show(at: target.frame, sameField: sameField) } else { overlay.hide() }
     }
 
-    /// Reads the Slack thread open in `app`'s window and shows its summary under `anchor` (the Summarize button, Cocoa
-    /// screen coordinates). Never writes to Slack; the summary is also copied.
+    /// Reads the Slack thread open in `app`'s window and shows its Hermes summary under `anchor` (the Summarize button,
+    /// Cocoa screen coordinates). Never writes to Slack; the summary is also copied.
     func summarizeThread(in app: NSRunningApplication?, below anchor: NSRect) {
-        guard request == nil, !overlay.isBusy else { return }
-        request = Task { await self.runSummary(in: app, below: anchor) }
-    }
-
-    private func runSummary(in app: NSRunningApplication?, below anchor: NSRect) async {
-        defer { request = nil }
-        summaryDismissed = false
-        let action = TextAction.summarizeThread
         guard AXIsProcessTrusted() else {
             Notifier.show("Accessibility permission needed",
                           "Allow Quili in System Settings → Privacy & Security → Accessibility.")
@@ -101,41 +199,7 @@ final class ParaphraseController {
             return
         }
         DebugLog.write("summarize clicked (Slack pid \(app.processIdentifier))")
-        previewing = true
-        defer { previewing = false }
-        // Closable from the start, so a slow summary can be dismissed (which also cancels it).
-        bubble.show("Reading the thread…", above: anchor, tall: true, closable: true)
-
-        do {
-            let pid = app.processIdentifier
-            let thread = await Task.detached { ThreadReader.read(pid: pid) }.value
-            try Task.checkCancellation()
-            guard let thread, thread.text.trimmingCharacters(in: .whitespacesAndNewlines).count > 20 else {
-                bubble.hide()
-                Notifier.show("No thread found", "Open the thread in Slack's side pane (click its replies link) and try again.")
-                return
-            }
-            DebugLog.write("read \(thread.text.count) chars from the thread\(thread.truncated ? " (oldest messages dropped)" : "")")
-            DebugLog.write("thread text to summarize:\n\(thread.text)")
-
-            let result = try await ParaphraseClient.run(thread.text, settings: settings, action: action) { [weak self] partial in
-                guard let self, self.previewing, !self.summaryDismissed else { return }
-                self.bubble.show(partial, above: anchor, tall: true, closable: true)
-            }
-            guard !summaryDismissed else { return } // closed while the last of it was arriving
-            TextAccess.setPasteboard(TextHygiene.slackMarkup(result))
-            // The summary stays until it is closed with its ×.
-            bubble.show(result, above: anchor, tall: true, closable: true)
-            Notifier.show("Thread summarized", "The summary was copied to the clipboard.")
-        } catch is CancellationError {
-            if !summaryDismissed { bubble.hide() } // a dismissed bubble is already fading out
-        } catch let error as URLError where error.code == .cancelled {
-            if !summaryDismissed { bubble.hide() }
-        } catch {
-            bubble.hide()
-            DebugLog.write("\(action) failed: \(error.localizedDescription)")
-            Notifier.show("\(action.verb) failed", error.localizedDescription)
-        }
+        hermes.summarizeThread(pid: app.processIdentifier, below: anchor)
     }
 
     private func run(_ action: TextAction) async {

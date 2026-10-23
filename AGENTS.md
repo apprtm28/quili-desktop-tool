@@ -44,6 +44,19 @@ The icon geometry is shared as SVG path strings: when a glyph changes in the XAM
 
 Keep this list current. Anything not listed here is expected to match.
 
+- **Hermes integration (personal fork, macOS only; see `docs/hermes/decisions.md`).** None of this exists on Windows, and
+  Windows is not built or changed for it:
+  - Paraphrase and translate run through `opencode run` on the Mac when "Paraphrase with opencode on this Mac" is on
+    (`OpencodeClient`, prompts in `Prompts`); otherwise the server URL as before.
+  - The Summarize button sends the thread to the Hermes `work` profile over SSH (`HermesClient`, one session per thread,
+    `HermesSessions` encrypted store) instead of `/api/summarize-thread`, and shows it in `ConversationWindow` (coverage
+    line, Ask Hermes row, Refresh, Save to work context, Retry read, direct fallback when Hermes is unreachable).
+  - Range chips on Slack's main channel (`ChannelWatcher`, `ChipWindow`, `SlackMessages`, `RangeCollector`) collect
+    the messages between two marked messages for a Hermes summary.
+  - ⌃⌥H / "Ask Hermes about selection" sends the selected text of any app to Hermes (`HotKey`, `TextAccess.selectedText`).
+  - Approved notes are written by Quili over SSH into the vault folder on the Hermes host, never overwriting.
+  - `mac/build-swiftc.sh` builds without SwiftPM for Macs whose Command Line Tools can't.
+
 - API key storage: DPAPI-encrypted in `settings.json` (Windows) vs Keychain (macOS); other settings in `settings.json` vs `UserDefaults`.
 - Run at startup: the `Run` registry key vs `SMAppService`. The label reads "Start with Windows" vs "Start at login".
 - Single instance: named mutex vs a bundle-identifier check.
