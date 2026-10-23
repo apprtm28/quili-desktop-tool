@@ -61,8 +61,11 @@ namespace Quili.Platform
         /// One line for <paramref name="runs"/> (already trimmed, non-empty), as a header when it has the shape of one.
         /// <paramref name="firstIsButton"/> says the first run came from a button, which is how Slack renders an author's name.
         /// </summary>
-        public static string Line(IReadOnlyList<string> runs, bool firstIsButton)
+        public static string Line(IReadOnlyList<string> allRuns, bool firstIsButton)
         {
+            // "Also sent to the channel" is a label above the author's name, not part of it.
+            var runs = allRuns.Where(r => !r.Equals("also sent to the channel", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (runs.Count == 0) return string.Join(" ", allRuns);
             int t = -1;
             for (int i = 0; i < runs.Count; i++)
                 if (IsTime(runs[i])) { t = i; break; }

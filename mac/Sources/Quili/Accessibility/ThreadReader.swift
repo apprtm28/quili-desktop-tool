@@ -307,8 +307,9 @@ enum ThreadReader {
         let point = CGPoint(x: frame.midX, y: frame.midY)
         let deadline = Date().addingTimeInterval(scrollTimeLimit)
         let list = findList(in: root)
-        let step = frame.height * scrollStepFraction
+        var step = frame.height * scrollStepFraction
         var wheelUsable = true // until the accessibility action moves the pane where the wheel did not
+        var wheelSign: CGFloat = 1 // flips if Slack scrolls the opposite way to what was asked
         var wheelMoves = 0, jumpMoves = 0
 
         /// Scroll-wheel events in small slices so the pane glides like under a trackpad. Positive = towards the top.
@@ -322,6 +323,13 @@ enum ThreadReader {
                 Thread.sleep(forTimeInterval: 0.012)
             }
         }
+        /// Where the list's rendered items are on screen. It shifts whenever the pane really scrolls, even when the text read
+        /// stays the same (Slack renders a buffer of messages beyond the viewport), and stays put at the top or bottom, so
+        /// it is what tells a scroll that moved from one that hit the end.
+        func positions() -> [Int] {
+            guard let list else { return [] }
+            return AX.children(list).compactMap { AX.frame($0).map { Int($0.minY.rounded()) } }
+        }
         /// The view once scrolling has settled (smooth scrolling and rendering take a moment).
         func settledView() -> [String] {
             var previous: [String]?
@@ -334,25 +342,43 @@ enum ThreadReader {
             return previous ?? []
         }
         /// Moves the pane one step towards the top (`up`) or bottom and returns the new view, nil when it did not move
-        /// (the end of the thread).
+        /// (the end of the thread). The wheel is tried first; a move that overshoots (no overlap with what was read) is
+        /// undone and retried with a smaller step, and one that went the wrong way flips the direction.
         func advance(up: Bool, from current: [String]) -> [String]? {
+            let name = up ? "up" : "down"
+            var wheelDidMove = false
+            let before = positions()
             if wheelUsable {
-                smoothScroll(up ? step : -step)
-                let view = settledView()
-                if !view.isEmpty, !sameView(view, current) {
-                    // It moved; check it moved the way that was asked (the first view then ends where the other starts).
-                    let expected = up ? merge(view, current).overlapped : merge(current, view).overlapped
-                    if expected { wheelMoves += 1; return view }
-                    wheelUsable = false // moved the wrong way or too far: do not trust the wheel any more
+                for _ in 0..<4 {
+                    let delta = (up ? step : -step) * wheelSign
+                    smoothScroll(delta)
+                    let view = settledView()
+                    if view.isEmpty || (sameView(view, current) && positions() == before) { break } // not moved
+                    wheelDidMove = true
+                    let forward = up ? merge(view, current).overlapped : merge(current, view).overlapped
+                    if forward { wheelMoves += 1; return view }
+                    let backward = up ? merge(current, view).overlapped : merge(view, current).overlapped
+                    smoothScroll(-delta) // undo, then try again
+                    _ = settledView()
+                    if backward { wheelSign = -wheelSign } else { step = max(100, step / 2) }
                 }
-                // Not moved: the wheel is ignored, or this is the end; the accessibility action tells which.
             }
             let items = list.map { AX.children($0) } ?? []
-            guard let list, let item = up ? items.first : items.last,
-                  AXUIElementPerformAction(item, "AXScrollToVisible" as CFString) == .success else { return nil }
+            guard let list, let item = up ? items.first : items.last else {
+                DebugLog.write("thread: scroll \(name) stopped (wheel moved: \(wheelDidMove), no list item to scroll to)")
+                return nil
+            }
+            let result = AXUIElementPerformAction(item, "AXScrollToVisible" as CFString)
+            guard result == .success else {
+                DebugLog.write("thread: scroll \(name) stopped (wheel moved: \(wheelDidMove), AXScrollToVisible error \(result.rawValue))")
+                return nil
+            }
             let view = settledView()
-            guard !view.isEmpty, !sameView(view, current) else { return nil }
-            wheelUsable = false
+            guard !view.isEmpty, !sameView(view, current) || positions() != before else {
+                DebugLog.write("thread: scroll \(name) stopped (wheel moved: \(wheelDidMove), AXScrollToVisible changed nothing)")
+                return nil
+            }
+            if !wheelDidMove, wheelMoves == 0 { wheelUsable = false } // the wheel is ignored, only the jump works
             jumpMoves += 1
             return view
         }
@@ -375,8 +401,17 @@ enum ThreadReader {
             downSteps += 1
         }
 
-        // Done: scroll back to the top, where the thread starts.
+        // Done: scroll back to the top, where the thread starts. Big wheel moves while the items still shift, then the
+        // normal step to be sure of the top.
         if downSteps > 0 {
+            if wheelUsable {
+                for _ in 0..<maxScrollSteps {
+                    let before = positions()
+                    smoothScroll(step * 3 * wheelSign)
+                    Thread.sleep(forTimeInterval: 0.25)
+                    if positions() == before { break }
+                }
+            }
             var back = 0
             while back < maxScrollSteps, let next = advance(up: true, from: current) {
                 current = next

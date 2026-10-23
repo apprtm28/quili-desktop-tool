@@ -46,7 +46,10 @@ enum ThreadFormat {
 
     /// One line for `runs` (already trimmed, non-empty), as a header when it has the shape of one.
     /// `firstIsButton` says the first run came from a button, which is how Slack renders an author's name.
-    static func line(from runs: [String], firstIsButton: Bool) -> String {
+    static func line(from allRuns: [String], firstIsButton: Bool) -> String {
+        // "Also sent to the channel" is a label above the author's name, not part of it.
+        let runs = allRuns.filter { $0.lowercased() != "also sent to the channel" }
+        guard !runs.isEmpty else { return allRuns.joined(separator: " ") }
         guard let t = runs.firstIndex(where: isTime), (1...maxNameRuns).contains(t), !runs[0].hasPrefix("@") else {
             return runs.joined(separator: " ")
         }
