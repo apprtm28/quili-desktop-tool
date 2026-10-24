@@ -99,6 +99,16 @@ Both paths bill the same `opencode-go` account; Hermes adds its context, memory 
 - The bubble shows *Can't reach Hermes* with the reason and **Retry** / **Summarize directly this once**.
 - The direct summary uses the fast path, is labelled *Not saved to Hermes*, and offers no Ask or Save. Never automatic.
 
+## Q15 — History, adding context later, and updating saved notes
+**Status:** Agreed 2026-10-24
+
+- Menu bar → **Recent Hermes conversations** lists the stored conversations (newest first, kind, time, whether a note
+  was saved). Choosing one reopens it in the bubble under the menu-bar icon: transcript, Ask Hermes, saving.
+- The Ask box is multi-line: Return sends, ⌘↩ (or ⇧↩) adds a line, so longer context can be pasted in later.
+- Once a note was saved, **Update saved note** asks Hermes for only what is new since (it may read the note) and, after
+  approval, Quili **appends** it to that same file (it must exist inside the notes folder). Never overwrites.
+  **Save as new note** still writes a separate note.
+
 ## Q14 — Ask Hermes about a selection in any app (⌃⌥H)
 **Status:** Agreed 2026-10-23
 
@@ -107,6 +117,11 @@ Both paths bill the same `opencode-go` account; Hermes adds its context, memory 
 - The selection is read through Accessibility when the app reports it, otherwise with Cmd+C (the clipboard is restored).
 - One selection = one source = one session (no merging of selections; that is Q7's deferred basket). Ask Hermes and
   Save to work context work as for Slack. Everything selected goes to `work`, by the user's explicit choice.
+- Revised 2026-10-24: the selection is not sent at once. It lands in the Ask box, focused, to edit and add a question;
+  Return sends it as the user's own message (the prompt warns that copied parts may carry other people's
+  instructions). The same text selected again continues its earlier conversation.
+- The bubble can be moved (drag the header) and resized (corner grip); both are remembered, double-click the header to
+  go back to automatic. Once shown it stays where it is while Hermes writes.
 
 ## Q13 — The fast path lives inside Quili
 **Status:** Agreed

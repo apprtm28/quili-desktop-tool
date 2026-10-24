@@ -41,7 +41,8 @@ final class HermesController {
         case conversation
         /// A summary made without Hermes (Q12): no session, no Ask, no Save.
         case direct(String?)
-        case drafting(title: String)
+        /// A note draft; `appendTo` is the saved note an update goes into, nil for a new note.
+        case drafting(title: String, appendTo: String?)
         case unreachable
     }
 
@@ -105,6 +106,8 @@ final class HermesController {
     }
 
     /// ⌃⌥H: text selected in another app (Gmail, Chrome…) becomes its own source, summarized by Hermes.
+    /// The copied text goes into the Ask box, focused, to edit and add a question; Return sends it to Hermes. The same
+    /// text selected again continues its earlier conversation.
     func askAboutSelection(_ text: String, source: String, near anchor: NSRect) {
         cancelWork()
         self.anchor = anchor
@@ -115,9 +118,32 @@ final class HermesController {
             body = String(body.prefix(ThreadReader.maxChars))
             coverage.stoppedEarly = true
         }
-        mode = .reading
-        window.show(state(body: .message("Reading the selection…")), near: anchor)
-        open(SlackSource(kind: .selection, channel: source, messages: [body], coverage: coverage, reread: nil))
+        let selection = SlackSource(kind: .selection, channel: source, messages: [body], coverage: coverage, reread: nil)
+        slack = selection
+        notice = coverage.warning
+        let key = HermesSessions.key(kind: .selection, channel: source, firstMessage: body)
+        record = store.source(key).flatMap { $0.sessionId == nil ? nil : $0 }
+            ?? HermesSource(key: key, kind: .selection, channel: source, title: Self.title(for: selection), sessionId: nil,
+                            sentMessages: [], transcript: [], updated: Date())
+        mode = .conversation
+        window.show(state(body: .message("")), near: anchor)
+        render()
+        window.prefillAsk(body + "\n\n")
+    }
+
+    /// Reopens a stored conversation from the menu bar's history: its transcript, Ask Hermes, and saving (an update
+    /// to the note saved before, or a new note). The Slack source itself isn't re-read.
+    func openHistory(key: String, near anchor: NSRect) {
+        guard let known = store.source(key), known.sessionId != nil else { return }
+        cancelWork()
+        self.anchor = anchor
+        reset()
+        record = known
+        slack = SlackSource(kind: known.kind, channel: known.channel, messages: [], coverage: ReadCoverage(), reread: nil)
+        mode = .conversation
+        window.show(state(body: .message("")), near: anchor)
+        render()
+        DebugLog.write("hermes: reopened \(key) from history")
     }
 
     static func readThread(pid: pid_t) async -> SlackSource? {
@@ -156,7 +182,7 @@ final class HermesController {
     private func summarize() {
         guard let slack, let record else { return }
         let input = slack.kind == .selection
-            ? Prompts.hermesSelection(source: slack.channel, text: slack.text)
+            ? Prompts.hermesComposed(source: slack.channel, message: slack.text)
             : Prompts.hermesSummary(kind: slack.kind.rawValue, channel: slack.channel, text: slack.text,
                                     coverage: slack.coverage.warning)
         let target: HermesTarget = record.sessionId.map { .resume(sessionId: $0) } ?? .create(title: record.title)
@@ -165,11 +191,22 @@ final class HermesController {
     }
 
     private func ask(_ question: String) {
-        guard var record, let session = record.sessionId, busySince == nil else { return }
+        guard var record, busySince == nil, record.sessionId != nil || record.kind == .selection else { return }
         record.transcript.append(.init(role: .question, text: question, date: Date()))
         self.record = record
-        store.save(record)
-        runTurn(question, target: .resume(sessionId: session), role: .answer, sending: [])
+        if record.sessionId != nil { store.save(record) }
+        send(question)
+    }
+
+    /// A question to the session; a selection's first message also creates it.
+    private func send(_ question: String) {
+        guard let record else { return }
+        if let session = record.sessionId {
+            runTurn(question, target: .resume(sessionId: session), role: .answer, sending: [])
+        } else {
+            runTurn(Prompts.hermesComposed(source: record.channel, message: question), target: .create(title: record.title),
+                    role: .answer, sending: [])
+        }
     }
 
     private func refresh() {
@@ -279,31 +316,49 @@ final class HermesController {
 
     // MARK: Save to work context (Q5, Q8, Q9)
 
-    private func saveToContext() {
+    /// `update`: add to the note saved earlier from this conversation instead of writing a new one.
+    private func saveToContext(update: Bool = false) {
         guard let slack, let record, let session = record.sessionId, busySince == nil else { return }
         if !slack.coverage.isClean && !saveAnyway {
             alert = "This read may be incomplete (\(slack.coverage.warning ?? "")). Retry the read, or save anyway."
-            render(extra: [ConversationAction(id: "saveAnyway", title: "Save anyway")])
+            render(extra: [ConversationAction(id: update ? "updateAnyway" : "saveAnyway", title: "Save anyway")])
             return
         }
-        mode = .drafting(title: record.title)
-        runTurn(Prompts.hermesNoteDraft, target: .resume(sessionId: session), role: .note, sending: [])
+        if update, let path = record.savedNote {
+            mode = .drafting(title: record.title, appendTo: path)
+            runTurn(Prompts.hermesNoteUpdate(path: path), target: .resume(sessionId: session), role: .note, sending: [])
+        } else {
+            mode = .drafting(title: record.title, appendTo: nil)
+            runTurn(Prompts.hermesNoteDraft, target: .resume(sessionId: session), role: .note, sending: [])
+        }
     }
 
     private func showDraft(_ reply: String) {
+        if case .drafting(_, let path?) = mode {
+            guard let body = Self.block("quili_note_update", in: reply) else {
+                mode = .conversation
+                alert = "Hermes didn't return an update. Try Update saved note again."
+                return
+            }
+            let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .short)
+            window.show(state(body: .draft(text: "## Update — \(stamp)\n\n\(body)\n", target: path)), near: anchor)
+            return
+        }
         guard let parsed = Self.parseNote(reply) else {
             mode = .conversation
             alert = "Hermes didn't return a note draft. Try Save to work context again."
             return
         }
         let header = Self.frontMatter(channel: slack?.channel ?? "", session: record?.sessionId ?? "")
-        mode = .drafting(title: parsed.title)
+        mode = .drafting(title: parsed.title, appendTo: nil)
         window.show(state(body: .draft(text: "\(header)# \(parsed.title)\n\n\(parsed.body)\n", target: target(for: parsed.title))),
                     near: anchor)
     }
 
     private func approveDraft() {
         let markdown = window.draftText
+        var appendTo: String?
+        if case .drafting(_, let path) = mode { appendTo = path }
         let title = markdown.split(separator: "\n").first { $0.hasPrefix("# ") }.map { String($0.dropFirst(2)) } ?? record?.title ?? "note"
         let name = Self.fileName(for: title)
         startBusy()
@@ -311,7 +366,13 @@ final class HermesController {
         task = Task { [weak self] in
             guard let self else { return }
             do {
-                let path = try await HermesClient.writeNote(markdown, name: name, settings: self.settings)
+                let path: String
+                if let appendTo {
+                    try await HermesClient.appendNote(markdown, to: appendTo, settings: self.settings)
+                    path = appendTo
+                } else {
+                    path = try await HermesClient.writeNote(markdown, name: name, settings: self.settings)
+                }
                 self.stopBusy(seconds: nil)
                 self.mode = .conversation
                 self.saveAnyway = false
@@ -320,7 +381,7 @@ final class HermesController {
                     self.record = record
                     self.store.save(record)
                 }
-                Notifier.show("Saved to work context", name)
+                Notifier.show(appendTo == nil ? "Saved to work context" : "Note updated", (path as NSString).lastPathComponent)
                 self.render()
             } catch {
                 self.stopBusy(seconds: nil)
@@ -338,10 +399,20 @@ final class HermesController {
         case "cancel": close()
         case "refresh": refresh()
         case "save": saveToContext()
+        case "update": saveToContext(update: true)
         case "saveAnyway": saveAnyway = true; saveToContext()
+        case "updateAnyway": saveAnyway = true; saveToContext(update: true)
         case "retryRead": retryRead()
         case "retry":
-            if record?.sessionId == nil { summarize() } else { alert = nil; render() }
+            if record?.sessionId == nil, record?.kind == .selection, let last = record?.transcript.last(where: { $0.role == .question }) {
+                mode = .conversation
+                send(last.text) // the first message never reached Hermes
+            } else if record?.sessionId == nil {
+                summarize()
+            } else {
+                alert = nil
+                render()
+            }
         case "direct": summarizeDirectly()
         case "approve": approveDraft()
         case "discard": mode = .conversation; alert = nil; render()
@@ -417,13 +488,17 @@ final class HermesController {
                 body = .message("Hermes is drafting the note…")
             } else {
                 // Keep the draft on screen (an approve failure re-renders it).
-                body = .draft(text: window.draftText, target: target(for: currentDraftTitle))
+                var target = target(for: currentDraftTitle)
+                if case .drafting(_, let path?) = mode { target = path }
+                body = .draft(text: window.draftText, target: target)
             }
         case .conversation, .unreachable:
             body = .transcript(record?.transcript ?? [], streaming: streaming)
         }
         if case .conversation = mode, record?.transcript.isEmpty ?? true, streaming == nil, busySince == nil {
-            body = .message(alert == nil ? "Reading the thread…" : "No summary yet.")
+            body = .message(record?.kind == .selection
+                ? "Edit the copied text and add your question, then press Return to send it to Hermes. ⌘↩ adds a line."
+                : alert == nil ? "Reading the thread…" : "No summary yet.")
         }
         var s = state(body: body)
         s.actions = actions() + extra
@@ -431,7 +506,7 @@ final class HermesController {
     }
 
     private var currentDraftTitle: String {
-        if case .drafting(let title) = mode { return title }
+        if case .drafting(let title, _) = mode { return title }
         return record?.title ?? "note"
     }
 
@@ -448,9 +523,11 @@ final class HermesController {
         if case .direct = mode { status = busySince == nil ? "Not saved to Hermes" : status?.replacingOccurrences(of: "Hermes", with: "opencode") }
         if mode.isPicking { status = "\(pick.filter(\.included).count) of \(pick.count) messages" }
         var ask: String?
-        if case .conversation = mode, record?.sessionId != nil { ask = "Ask Hermes…" }
-        return ConversationState(title: title, status: status, notice: notice, alert: alert, body: body,
-                                 actions: [], askPlaceholder: ask, busy: busySince != nil)
+        if case .conversation = mode, record?.sessionId != nil || record?.kind == .selection { ask = "Ask Hermes…" }
+        var s = ConversationState(title: title, status: status, notice: notice, alert: alert, body: body,
+                                  actions: [], askPlaceholder: ask, busy: busySince != nil)
+        s.largeAsk = record?.kind == .selection && record?.sessionId == nil // the copied text being edited
+        return s
     }
 
     private func actions() -> [ConversationAction] {
@@ -476,7 +553,12 @@ final class HermesController {
             if let slack, let record, !newMessages(in: slack, for: record).isEmpty {
                 list.append(ConversationAction(id: "refresh", title: "Refresh", primary: true))
             }
-            list.append(ConversationAction(id: "save", title: "Save to work context", primary: list.isEmpty))
+            if record?.savedNote != nil {
+                list.append(ConversationAction(id: "update", title: "Update saved note", primary: list.isEmpty))
+                list.append(ConversationAction(id: "save", title: "Save as new note"))
+            } else {
+                list.append(ConversationAction(id: "save", title: "Save to work context", primary: list.isEmpty))
+            }
             if slack?.reread != nil { list.append(ConversationAction(id: "retryRead", title: "Retry read")) }
             list.append(ConversationAction(id: "forget", title: "Start over"))
             return list
@@ -559,6 +641,14 @@ final class HermesController {
     static func frontMatter(channel: String, session: String) -> String {
         let now = ISO8601DateFormatter().string(from: Date())
         return "---\nsource: quili\nchannel: \"\(channel.replacingOccurrences(of: "\"", with: "'"))\"\nsaved: \(now)\nhermes_session: \(session)\n---\n\n"
+    }
+
+    /// The text inside `<tag>…</tag>` of a reply.
+    static func block(_ tag: String, in reply: String) -> String? {
+        guard let open = reply.range(of: "<\(tag)>"), let close = reply.range(of: "</\(tag)>", range: open.upperBound..<reply.endIndex)
+        else { return nil }
+        let body = reply[open.upperBound..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+        return body.isEmpty ? nil : body
     }
 
     /// The `<quili_note title="…">…</quili_note>` block of a draft reply.

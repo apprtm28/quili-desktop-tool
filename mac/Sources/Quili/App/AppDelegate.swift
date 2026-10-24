@@ -4,7 +4,7 @@ import Carbon.HIToolbox
 
 /// Owns the app lifecycle and the menu-bar UI; the paraphrase behavior lives in `ParaphraseController`.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let settings = Settings()
     private lazy var controller = ParaphraseController(settings: settings)
     private lazy var settingsWindow = SettingsWindow(settings: settings)
@@ -54,6 +54,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let ask = menu.addItem(withTitle: "Ask Hermes about selection", action: #selector(askAboutSelection), keyEquivalent: "h")
         ask.keyEquivalentModifierMask = [.control, .option]
         ask.target = self
+        let history = menu.addItem(withTitle: "Recent Hermes conversations", action: nil, keyEquivalent: "")
+        let historyMenu = NSMenu(title: "Recent Hermes conversations")
+        historyMenu.delegate = self // filled each time it opens
+        history.submenu = historyMenu
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         let pause = menu.addItem(withTitle: "Pause", action: #selector(togglePause(_:)), keyEquivalent: "")
         pause.target = self
@@ -81,6 +86,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// From the menu the frontmost app is still the one with the selection (an accessory app doesn't activate).
     @objc private func askAboutSelection() { controller.askHermesAboutSelection() }
+
+    /// The history submenu: the stored conversations, newest first, each with its kind, time, and whether a note was saved.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu.title == "Recent Hermes conversations" else { return }
+        menu.removeAllItems()
+        let recent = HermesSessions.shared.recent()
+        guard !recent.isEmpty else {
+            menu.addItem(withTitle: "No conversations yet", action: nil, keyEquivalent: "").isEnabled = false
+            return
+        }
+        let when = DateFormatter()
+        when.dateFormat = "d MMM HH:mm"
+        for source in recent {
+            var title = source.title.hasPrefix("quili: ") ? String(source.title.dropFirst(7)) : source.title
+            if title.count > 60 { title = String(title.prefix(59)) + "…" }
+            let item = menu.addItem(withTitle: title, action: #selector(openHistory(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = source.key
+            let detail = "\(source.kind.rawValue) · \(when.string(from: source.updated))\(source.savedNote != nil ? " · note saved" : "")"
+            let text = NSMutableAttributedString(string: title + "\n", attributes: [.font: NSFont.menuFont(ofSize: 13)])
+            text.append(NSAttributedString(string: detail, attributes: [.font: NSFont.menuFont(ofSize: 11),
+                                                                       .foregroundColor: NSColor.secondaryLabelColor]))
+            item.attributedTitle = text
+        }
+    }
+
+    @objc private func openHistory(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        let anchor = statusItem?.button?.window?.frame ?? NSRect(x: NSScreen.main?.visibleFrame.maxX ?? 800, y: NSScreen.main?.visibleFrame.maxY ?? 800, width: 1, height: 1)
+        controller.openHermesHistory(key, near: anchor)
+    }
 
     @objc private func togglePause(_ sender: NSMenuItem) {
         controller.paused.toggle()

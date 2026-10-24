@@ -4,6 +4,9 @@ import Security
 
 /// One Slack source (a thread, or a range collected from a channel) and its Hermes session (Q7).
 struct HermesSource: Codable {
+    /// The last note saved to the work context from this conversation (its path on the Hermes host).
+    var savedNote: String? { transcript.last { $0.role == .note }?.text }
+
     enum Kind: String, Codable { case thread, range, selection }
     struct Entry: Codable {
         enum Role: String, Codable { case summary, question, answer, note }
@@ -35,6 +38,12 @@ final class HermesSessions {
     private var cachedKey: SymmetricKey?
 
     func source(_ key: String) -> HermesSource? { load()[key] }
+
+    /// The conversations with a Hermes session, most recently used first (the menu bar's history).
+    func recent(limit: Int = 20) -> [HermesSource] {
+        load().values.filter { $0.sessionId != nil && !$0.transcript.isEmpty }
+            .sorted { $0.updated > $1.updated }.prefix(limit).map { $0 }
+    }
 
     func save(_ source: HermesSource) {
         var all = load()

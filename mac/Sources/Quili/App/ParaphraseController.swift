@@ -113,6 +113,11 @@ final class ParaphraseController {
         }
     }
 
+    /// Reopens a stored Hermes conversation (menu bar → Recent Hermes conversations).
+    func openHermesHistory(_ key: String, near anchor: NSRect) {
+        hermes.openHistory(key: key, near: anchor)
+    }
+
     // MARK: - Range chips
 
     private func channelHoverChanged(_ hover: ChannelHover?) {

@@ -39,12 +39,15 @@ struct ConversationState {
     var askPlaceholder: String?
     /// A request is running: the Ask row is disabled meanwhile.
     var busy = false
+    /// The Ask box holds longer text being edited (a ⌃⌥H selection): it may grow taller.
+    var largeAsk = false
 }
 
 // MARK: - Pieces
 
 private enum Style {
-    static let width: CGFloat = 400, maxHeight: CGFloat = 560, pad: CGFloat = 14
+    static let width: CGFloat = 440, maxHeight: CGFloat = 560, pad: CGFloat = 14
+    static let minSize = NSSize(width: 340, height: 220)
     static let body = NSFont.systemFont(ofSize: 13)
     static let bold = NSFont.boldSystemFont(ofSize: 13)
     static let small = NSFont.systemFont(ofSize: 11.5)
@@ -198,12 +201,47 @@ private final class PickRow: Clickable {
 
 /// A text control that asks the panel for keyboard focus when clicked (the panel is otherwise never key, so Slack
 /// keeps its focus).
-private final class AskField: NSTextField {
+/// The Ask box: Return sends, ⌘↩ (or ⇧↩) starts a new line, so pasted context and longer questions fit. It grows
+/// to a few lines, then scrolls.
+private final class AskTextView: NSTextView {
     var onEngage: (() -> Void)?
+    var onSubmit: (() -> Void)?
+    var onEscape: (() -> Void)?
+    var placeholder = "" { didSet { needsDisplay = true } }
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) {
         onEngage?()
         super.mouseDown(with: event)
+    }
+
+    private static func isReturn(_ event: NSEvent) -> Bool { event.keyCode == 36 || event.keyCode == 76 }
+
+    override func keyDown(with event: NSEvent) {
+        guard Self.isReturn(event) else { return super.keyDown(with: event) }
+        if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.shift) {
+            insertNewlineIgnoringFieldEditor(nil)
+        } else {
+            onSubmit?()
+        }
+    }
+
+    // ⌘↩ can arrive as a key equivalent before keyDown.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if window?.firstResponder === self, Self.isReturn(event), event.modifierFlags.contains(.command) {
+            insertNewlineIgnoringFieldEditor(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func cancelOperation(_ sender: Any?) { onEscape?() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty, !placeholder.isEmpty else { return }
+        NSAttributedString(string: placeholder, attributes: [.font: Style.body, .foregroundColor: Brand.muted])
+            .draw(at: NSPoint(x: textContainerInset.width + (textContainer?.lineFragmentPadding ?? 0), y: textContainerInset.height))
     }
 }
 
@@ -221,7 +259,8 @@ private final class AskFrame: NSView {
     var focused = false { didSet { needsDisplay = true } }
     override var isFlipped: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
-        let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.75, dy: 0.75), xRadius: bounds.height / 2, yRadius: bounds.height / 2)
+        let radius = min(18, bounds.height / 2)
+        let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.75, dy: 0.75), xRadius: radius, yRadius: radius)
         NSColor.white.setFill()
         shape.fill()
         shape.lineWidth = 1.2
@@ -247,6 +286,40 @@ private final class SendButton: Clickable {
     }
 }
 
+/// The header strip: dragging it moves the bubble, double-clicking it puts the bubble back to automatic placement and size.
+private final class DragStrip: NSView {
+    var onMoved: (() -> Void)?
+    var onReset: (() -> Void)?
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 { onReset?(); return }
+        window?.performDrag(with: event)
+        onMoved?()
+    }
+}
+
+/// The resize grip at the bottom-right corner: drags the corner, the top-left stays put.
+private final class ResizeGrip: NSView {
+    var onResize: ((NSPoint) -> Void)?
+    var onDone: (() -> Void)?
+    override var isFlipped: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .crosshair) }
+    override func mouseDragged(with event: NSEvent) { onResize?(NSEvent.mouseLocation) }
+    override func mouseUp(with event: NSEvent) { onDone?() }
+    override func draw(_ dirtyRect: NSRect) {
+        let lines = NSBezierPath()
+        for offset: CGFloat in [4, 8] {
+            lines.move(to: NSPoint(x: bounds.maxX - 3, y: bounds.maxY - 3 - offset))
+            lines.line(to: NSPoint(x: bounds.maxX - 3 - offset, y: bounds.maxY - 3))
+        }
+        lines.lineWidth = 1.2
+        lines.lineCapStyle = .round
+        Brand.muted.withAlphaComponent(0.7).setStroke()
+        lines.stroke()
+    }
+}
+
 /// Never key unless the Ask row or the draft editor asked for it; Esc hands focus back.
 private final class ConversationPanel: NSPanel {
     var wantsKey = false
@@ -262,7 +335,7 @@ private final class ConversationPanel: NSPanel {
 /// range chip. Click-through parts stay out of Slack's way; it takes keyboard focus only when the Ask row (or the note
 /// editor) is clicked, and Esc gives it back to Slack.
 @MainActor
-final class ConversationWindow: NSObject, NSTextFieldDelegate {
+final class ConversationWindow: NSObject, NSTextViewDelegate {
     private static let gap: CGFloat = 6
     private let panel: ConversationPanel
     private let card = FlippedView()
@@ -279,12 +352,21 @@ final class ConversationWindow: NSObject, NSTextFieldDelegate {
     private let targetLabel = NSTextField(wrappingLabelWithString: "")
     private let pickList = FlippedView()
     private let askFrame = AskFrame()
-    private let askField = AskField()
+    private let askField = AskTextView()
+    private let askScroll = NSScrollView()
     private let send = SendButton(frame: NSRect(x: 0, y: 0, width: 26, height: 26))
     private var pills: [Pill] = []
     private var rows: [PickRow] = []
     private var anchor: NSRect = .zero
     private var state: ConversationState?
+    /// Placed against the anchor (or where the user put it) only when shown; later updates keep it where it is, so it
+    /// doesn't jump while being dragged or while Hermes writes.
+    private var placeOnLayout = true
+    private let dragStrip = DragStrip()
+    private let grip = ResizeGrip(frame: NSRect(x: 0, y: 0, width: 16, height: 16))
+    /// Where and how big the user made the bubble (top-left in Cocoa screen coordinates); nil = automatic. Remembered.
+    private var userTopLeft: NSPoint? = UserDefaults.standard.string(forKey: "conversationTopLeft").map(NSPointFromString)
+    private var userSize: NSSize? = UserDefaults.standard.string(forKey: "conversationSize").map(NSSizeFromString)
     private var fadeID = 0
     private var previousApp: NSRunningApplication?
 
@@ -359,24 +441,36 @@ final class ConversationWindow: NSObject, NSTextFieldDelegate {
         draftScroll.layer?.borderWidth = 1
         draftScroll.layer?.borderColor = Brand.line.cgColor
 
-        askField.isBordered = false
+        askField.isRichText = false
         askField.drawsBackground = false
-        askField.focusRingType = .none
         askField.font = Style.body
         askField.textColor = Brand.ink
-        askField.cell?.isScrollable = true
-        askField.cell?.usesSingleLineMode = true
+        askField.insertionPointColor = Brand.ink
+        askField.textContainerInset = .zero
+        askField.textContainer?.lineFragmentPadding = 0
+        askField.textContainer?.widthTracksTextView = true
+        askField.isVerticallyResizable = true
+        askField.isHorizontallyResizable = false
+        askField.autoresizingMask = [.width]
+        askField.allowsUndo = true
+        askField.isAutomaticQuoteSubstitutionEnabled = false
+        askField.isAutomaticDashSubstitutionEnabled = false
         askField.delegate = self
-        askField.target = self
-        askField.action = #selector(submit)
+        askField.onSubmit = { [weak self] in self?.submit() }
+        askField.onEscape = { [weak self] in self?.releaseFocus() }
         askField.onEngage = { [weak self] in self?.engage(self?.askField) }
-        askFrame.addSubview(askField)
+        configure(askScroll, document: askField)
+        askFrame.addSubview(askScroll)
         askFrame.addSubview(send)
         send.onClick = { [weak self] in self?.submit() }
         close.onClick = { [weak self] in self?.onClose?() }
 
-        [dot, titleLabel, statusLabel, close, noticeLabel, alertLabel, scroll, draftScroll, targetLabel, pickList, askFrame]
-            .forEach(card.addSubview)
+        [dot, titleLabel, statusLabel, dragStrip, close, noticeLabel, alertLabel, scroll, draftScroll, targetLabel, pickList,
+         askFrame, grip].forEach(card.addSubview)
+        dragStrip.onMoved = { [weak self] in self?.rememberPosition() }
+        dragStrip.onReset = { [weak self] in self?.resetPlacement() }
+        grip.onResize = { [weak self] point in self?.resize(to: point) }
+        grip.onDone = { [weak self] in self?.rememberSize() }
     }
 
     private func configure(_ scroll: NSScrollView, document: NSTextView) {
@@ -394,7 +488,17 @@ final class ConversationWindow: NSObject, NSTextFieldDelegate {
     /// Shows `state` next to `anchor` (Cocoa screen coordinates): below it, or above when there is no room.
     func show(_ state: ConversationState, near anchor: NSRect) {
         self.anchor = anchor
+        placeOnLayout = true
         apply(state)
+    }
+
+    /// Puts `text` in the Ask box with the cursor at its end, and takes keyboard focus so it can be edited right away.
+    func prefillAsk(_ text: String) {
+        askField.string = text
+        layout()
+        engage(askField)
+        askField.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+        askField.scrollToEndOfDocument(nil)
     }
 
     /// Replaces the content, keeping the anchor.
@@ -411,9 +515,8 @@ final class ConversationWindow: NSObject, NSTextFieldDelegate {
         statusLabel.stringValue = state.status ?? ""
         noticeLabel.stringValue = state.notice ?? ""
         alertLabel.stringValue = state.alert ?? ""
-        askField.placeholderAttributedString = NSAttributedString(string: state.askPlaceholder ?? "",
-                                                                  attributes: [.font: Style.body, .foregroundColor: Brand.muted])
-        askField.isEnabled = !state.busy
+        askField.placeholder = (state.askPlaceholder ?? "") + (state.busy ? "" : "  (⌘↩ new line)")
+        askField.isEditable = !state.busy
         send.enabled = !state.busy
 
         pills.forEach { $0.removeFromSuperview() }
@@ -434,7 +537,7 @@ final class ConversationWindow: NSObject, NSTextFieldDelegate {
 
     private func buildRows(_ items: [PickItem]) {
         rows.forEach { $0.removeFromSuperview() }
-        let width = Style.width - 2 * Style.pad
+        let width = currentWidth - 2 * Style.pad
         rows = items.enumerated().map { index, item in
             let row = PickRow(item, width: width)
             row.frame.origin.y = CGFloat(index) * PickRow.height
@@ -452,7 +555,11 @@ final class ConversationWindow: NSObject, NSTextFieldDelegate {
     /// Lays the card out top to bottom and sizes the panel to fit (scrolling parts take what is left).
     private func layout() {
         guard let state else { return }
-        let width = Style.width, pad = Style.pad, inner = width - 2 * pad
+        let width = currentWidth, pad = Style.pad, inner = width - 2 * pad
+        let screen = (NSScreen.screens.first { $0.frame.contains(userTopLeft ?? NSPoint(x: anchor.midX, y: anchor.midY)) }
+            ?? NSScreen.main)?.visibleFrame ?? .zero
+        // A size the user chose is kept exactly; otherwise the bubble fits its content up to 75% of the screen.
+        let target = userSize.map { min($0.height, screen.height) } ?? max(Style.maxHeight, screen.height * 0.75)
         var y: CGFloat = 12
 
         dot.frame.origin = NSPoint(x: pad, y: y)
@@ -474,10 +581,12 @@ final class ConversationWindow: NSObject, NSTextFieldDelegate {
         wrapped(alertLabel, state.alert)
 
         // Fixed parts below the body: the Ask row and the action pills.
-        let askHeight: CGFloat = state.askPlaceholder == nil ? 0 : 36 + 10
+        let askBox = askBoxHeight(width: inner, max: state.largeAsk ? max(112, target * 0.45) : 112)
+        let askHeight: CGFloat = state.askPlaceholder == nil ? 0 : askBox + 10
         let pillRows = arrangePills(width: inner)
         let pillsHeight = pillRows.isEmpty ? 0 : CGFloat(pillRows.count) * (Pill.height + 6) + 4
-        let room = Style.maxHeight - y - askHeight - pillsHeight - 12
+        let room = target - y - askHeight - pillsHeight - 12
+        let fill = userSize != nil // the body takes all the room the user gave it
 
         scroll.isHidden = true; draftScroll.isHidden = true; targetLabel.isHidden = true; pickList.isHidden = true
         switch state.body {
@@ -495,7 +604,7 @@ final class ConversationWindow: NSObject, NSTextFieldDelegate {
                 manager.ensureLayout(for: container)
                 full = ceil(manager.usedRect(for: container).height)
             }
-            let height = max(18, min(full, room))
+            let height = max(18, fill ? room : min(full, room))
             scroll.frame.size.height = height
             transcript.frame = NSRect(x: 0, y: 0, width: textWidth, height: max(full, height))
             if case .transcript(_, let streaming) = state.body, streaming != nil {
@@ -503,7 +612,7 @@ final class ConversationWindow: NSObject, NSTextFieldDelegate {
             }
             y += height + 10
         case .pick:
-            let height = min(pickList.frame.height, max(PickRow.height * 3, room))
+            let height = fill ? max(PickRow.height * 3, room) : min(pickList.frame.height, max(PickRow.height * 3, room))
             let pickScroll = scrollFor(pickList)
             pickScroll.frame = NSRect(x: pad, y: y, width: inner, height: height)
             pickList.isHidden = false
@@ -513,7 +622,7 @@ final class ConversationWindow: NSObject, NSTextFieldDelegate {
             let targetHeight = ceil(targetLabel.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: inner, height: 100)).height ?? 16)
             targetLabel.frame = NSRect(x: pad, y: y, width: inner, height: targetHeight)
             y += targetHeight + 6
-            let height = min(300, room - targetHeight - 6)
+            let height = fill ? room - targetHeight - 6 : min(300, room - targetHeight - 6)
             draftScroll.isHidden = false
             draftScroll.frame = NSRect(x: pad, y: y, width: inner, height: height)
             draft.frame.size.width = inner
@@ -522,10 +631,11 @@ final class ConversationWindow: NSObject, NSTextFieldDelegate {
 
         askFrame.isHidden = state.askPlaceholder == nil
         if !askFrame.isHidden {
-            askFrame.frame = NSRect(x: pad, y: y, width: inner, height: 36)
-            send.frame.origin = NSPoint(x: inner - 5 - 26, y: 5)
-            askField.frame = NSRect(x: 14, y: (36 - 20) / 2, width: inner - 14 - 36, height: 20)
-            y += 36 + 10
+            askFrame.frame = NSRect(x: pad, y: y, width: inner, height: askBox)
+            send.frame.origin = NSPoint(x: inner - 5 - 26, y: askBox - 5 - 26)
+            askScroll.frame = NSRect(x: 14, y: 9, width: inner - 14 - 36, height: askBox - 18)
+            askField.frame.size.width = askScroll.contentSize.width
+            y += askBox + 10
         }
         for (index, row) in pillRows.enumerated() {
             for (pill, x) in row { pill.frame.origin = NSPoint(x: pad + x, y: y + CGFloat(index) * (Pill.height + 6)) }
@@ -533,18 +643,58 @@ final class ConversationWindow: NSObject, NSTextFieldDelegate {
         y += pillsHeight
         let height = y + 4
 
-        // Place against the anchor: below it when there is room, otherwise above.
-        let visible = (NSScreen.screens.first { $0.frame.intersects(anchor) } ?? NSScreen.main)?.visibleFrame ?? .zero
+        // Where the user put it; otherwise against the anchor: below it when there is room, otherwise above.
+        let visible = screen
         var x = anchor.maxX - width
         var top = anchor.minY - Self.gap // Cocoa: the panel's top edge
         if top - height < visible.minY { top = anchor.maxY + Self.gap + height }
+        if let userTopLeft { x = userTopLeft.x; top = userTopLeft.y }
+        if !placeOnLayout, panel.isVisible { x = panel.frame.minX; top = panel.frame.maxY } // stay where it is
+        placeOnLayout = false
         x = max(visible.minX, min(x, visible.maxX - width))
         top = max(visible.minY + height, min(top, visible.maxY))
         let margin: CGFloat = 0
         panel.setFrame(NSRect(x: x.rounded(), y: (top - height).rounded(), width: width + margin, height: height), display: true)
         panel.contentView?.frame = NSRect(x: 0, y: 0, width: width, height: height)
         card.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        dragStrip.frame = NSRect(x: 0, y: 0, width: close.frame.minX - 4, height: 40)
+        grip.frame.origin = NSPoint(x: width - 16, y: height - 16)
         panel.orderFrontRegardless()
+    }
+
+    private var currentWidth: CGFloat { max(Style.minSize.width, userSize?.width ?? Style.width) }
+
+    // MARK: Moving and resizing
+
+    private func rememberPosition() {
+        userTopLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
+        UserDefaults.standard.set(NSStringFromPoint(userTopLeft!), forKey: "conversationTopLeft")
+    }
+
+    /// The grip follows the pointer (Cocoa screen coordinates) with the top-left corner fixed.
+    private func resize(to point: NSPoint) {
+        let topLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
+        let visible = (NSScreen.screens.first { $0.frame.contains(topLeft) } ?? NSScreen.main)?.visibleFrame ?? .zero
+        userTopLeft = topLeft
+        userSize = NSSize(width: min(max(Style.minSize.width, point.x - topLeft.x), visible.width),
+                          height: min(max(Style.minSize.height, topLeft.y - point.y), visible.height))
+        layout()
+    }
+
+    private func rememberSize() {
+        guard let userSize, let userTopLeft else { return }
+        UserDefaults.standard.set(NSStringFromSize(userSize), forKey: "conversationSize")
+        UserDefaults.standard.set(NSStringFromPoint(userTopLeft), forKey: "conversationTopLeft")
+    }
+
+    /// Double-click on the header: back to automatic placement next to the button and a size that fits the content.
+    private func resetPlacement() {
+        userTopLeft = nil
+        userSize = nil
+        UserDefaults.standard.removeObject(forKey: "conversationTopLeft")
+        UserDefaults.standard.removeObject(forKey: "conversationSize")
+        placeOnLayout = true
+        layout()
     }
 
     /// The pick list lives in its own scroll view, made on first use.
@@ -635,15 +785,30 @@ final class ConversationWindow: NSObject, NSTextFieldDelegate {
         previousApp?.activate()
     }
 
-    @objc private func submit() {
-        let question = askField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// The Ask box's height for its text: one line (36) up to about five, then it scrolls.
+    private func askBoxHeight(width: CGFloat, max limit: CGFloat) -> CGFloat {
+        let textWidth = width - 14 - 36
+        let text = NSAttributedString(string: askField.string.isEmpty ? " " : askField.string + (askField.string.hasSuffix("\n") ? " " : ""),
+                                      attributes: [.font: Style.body])
+        return min(limit, max(36, Style.height(of: text, width: textWidth) + 18))
+    }
+
+    private func submit() {
+        let question = askField.string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty, state?.busy == false else { return }
-        askField.stringValue = ""
+        askField.string = ""
+        layout()
         onAsk?(question)
     }
 
-    func controlTextDidBeginEditing(_ obj: Notification) { askFrame.focused = true }
-    func controlTextDidEndEditing(_ obj: Notification) { askFrame.focused = false }
+    func textDidBeginEditing(_ notification: Notification) { askFrame.focused = true }
+    func textDidEndEditing(_ notification: Notification) { askFrame.focused = false }
+    /// The box grows with its text.
+    func textDidChange(_ notification: Notification) {
+        guard (notification.object as? NSTextView) === askField else { return }
+        layout()
+        askField.scrollToEndOfDocument(nil)
+    }
 
     // MARK: Hiding
 

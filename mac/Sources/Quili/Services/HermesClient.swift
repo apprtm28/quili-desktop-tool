@@ -125,6 +125,26 @@ enum HermesClient {
         return "\(folder)/\(name)"
     }
 
+    /// Appends an approved update to a note written earlier (Q9: still never overwrites). The file must exist inside the
+    /// notes folder from Settings.
+    static func appendNote(_ markdown: String, to path: String, settings: Settings) async throws {
+        let folder = settings.vaultFolder
+        let name = (path as NSString).lastPathComponent
+        guard path == "\(folder)/\(name)",
+              name.range(of: #"^[a-z0-9][a-z0-9-]{0,90}\.md$"#, options: .regularExpression) != nil else {
+            throw HermesError(message: "Refused to add to a note outside the notes folder: \(path)", unreachable: false)
+        }
+        let command = "f=\(Shell.path(folder))/\(Shell.quote(name)); [ -f \"$f\" ] || { echo 'note not found' >&2; exit 3; }; "
+            + "{ printf '\\n'; cat; } >> \"$f\""
+        let exit = try await ProcessLines.run("/usr/bin/ssh", sshArguments(host: settings.hermesHost, remoteCommand: command),
+                                              stdin: markdown, timeout: 30) { _ in }
+        guard exit.status == 0 else {
+            if exit.status == 3 { throw HermesError(message: "The saved note \(name) is no longer there.", unreachable: false) }
+            throw classify(status: exit.status, stderr: exit.stderr, failure: nil, target: nil, settings: settings)
+        }
+        DebugLog.write("note updated: \(path) (+\(markdown.count) chars)")
+    }
+
     /// Drops Hermes' notes about its own memory configuration ("Honcho memory is off …"), which aren't part of the answer.
     static func cleaned(_ text: String) -> String {
         let paragraphs = text.components(separatedBy: "\n\n")

@@ -144,7 +144,9 @@ This fork routes Quili's AI through tools on your own machines. Decisions and st
 - **Coverage:** when Quili can't confirm it read the whole thread (oldest messages left out, start not reached, fewer replies than Slack's count) an amber line says so, with **Retry read**.
 - **Ranges from the main channel:** hover a message, click **Start here**, hover another, click **End here**. Quili scrolls Slack between them, then lists the messages to untick before **Summarize with Hermes**.
 - **Save to work context:** Hermes drafts a note, you edit it in the bubble and **Approve and save**; Quili writes it over SSH to `~/ObsidianVault/03-resources/quili-work-context/` on the Hermes host (never overwriting). Blocked on an incomplete read unless you choose **Save anyway**.
-- **Any app (Gmail, Chrome…):** select text and press **⌃⌥H** (or menu bar → *Ask Hermes about selection*). Hermes summarizes it in the bubble; then Ask or **Save to work context** as above. Everything selected goes to the `work` profile.
+- **Any app (Gmail, Chrome…):** select text and press **⌃⌥H** (or menu bar → *Ask Hermes about selection*). The text lands in the bubble's Ask box, ready to edit: add your question and press Return (⌘↩ adds a line). Then continue or **Save to work context** as above. Everything selected goes to the `work` profile.
+- **Move / resize the bubble:** drag its header; drag the bottom-right corner. Remembered; double-click the header to reset.
+- **History:** menu bar → *Recent Hermes conversations* reopens any earlier conversation (kept 30 days) to ask more or paste more context. The Ask box is multi-line: Return sends, ⌘↩ adds a line. After a note was saved, **Update saved note** appends what's new to that same note; **Save as new note** writes another.
 - **Hermes unreachable:** the bubble offers **Retry** or **Summarize directly this once** (opencode, not saved to Hermes).
 - Hermes turns run with `-t file,skills,session_search,clarify,todo`; if Hermes writes a file anyway, the bubble shows a red warning.
 - Build on a Mac without Xcode: `mac/build-swiftc.sh` (arm64, works around broken Command Line Tools).
