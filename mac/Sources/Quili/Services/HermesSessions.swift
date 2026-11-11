@@ -24,6 +24,9 @@ struct HermesSource: Codable {
     var sentMessages: [String]
     var transcript: [Entry]
     var updated: Date
+    // Optional fields keep conversations saved by older versions readable.
+    var coverage: ReadCoverage?
+    var composerDraft: String?
 }
 
 /// The sources discussed with Hermes, kept in an AES-GCM sealed file whose key lives in the Keychain, and forgotten

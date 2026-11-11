@@ -13,7 +13,7 @@ struct ThreadText {
 }
 
 /// What a read knows about its own completeness (Q8). The bubble shows `warning` when something is off.
-struct ReadCoverage {
+struct ReadCoverage: Codable {
     var messages = 0
     var droppedOldest = 0
     /// The scroll pass reached the top of the pane (or nothing needed scrolling).

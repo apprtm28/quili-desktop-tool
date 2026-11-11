@@ -28,6 +28,16 @@ Q11's 12 s threshold: a new summary is just above it, follow-ups well under. Rev
 
 Deferred: expanding a picked message's thread replies ("include replies"); multi-source baskets (Q7).
 
+## UX improvements — 2026-10-24
+
+Implemented Q16: persisted coverage and composer text, one-step Check for new replies, Stop generating,
+Retry response, cancellation isolation, and scroll-position preservation. Headless controller regression tests
+pass (`python3 mac/Tests/run-hermes-ux.py`). The direct compiler check passes; the standard SwiftPM build still
+fails to link its package manifest with this Mac's Command Line Tools.
+
+Live checks still needed: scroll up during streaming, type a follow-up while busy, stop/retry, switch conversations
+with an unsent question, reopen an incomplete capture from History, and refresh after navigating Slack elsewhere.
+
 ## Needs a human
 
 - Grant Accessibility again after each rebuild (ad-hoc signature).

@@ -378,6 +378,10 @@ final class ConversationWindow: NSObject, NSTextViewDelegate {
     var isVisible: Bool { panel.isVisible }
     /// The note draft as edited in the bubble.
     var draftText: String { draft.string }
+    var composerText: String {
+        get { askField.string }
+        set { askField.string = newValue; askField.undoManager?.removeAllActions(); layout() }
+    }
 
     override init() {
         panel = ConversationPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -507,6 +511,18 @@ final class ConversationWindow: NSObject, NSTextViewDelegate {
         apply(state)
     }
 
+    /// Ticking the elapsed time must not replace the body or a note the user is editing.
+    func updateStatus(_ text: String?) {
+        guard panel.isVisible else { return }
+        state?.status = text
+        statusLabel.stringValue = text ?? ""
+        let y = statusLabel.frame.minY
+        statusLabel.sizeToFit()
+        let width = min(150, statusLabel.frame.width)
+        statusLabel.frame = NSRect(x: close.frame.minX - 6 - width, y: y, width: width, height: 16)
+        titleLabel.frame.size.width = statusLabel.frame.minX - dot.frame.maxX - 14
+    }
+
     private func apply(_ state: ConversationState) {
         cancelFade()
         let previousBody = self.state.map { String(describing: $0.body) }
@@ -516,7 +532,7 @@ final class ConversationWindow: NSObject, NSTextViewDelegate {
         noticeLabel.stringValue = state.notice ?? ""
         alertLabel.stringValue = state.alert ?? ""
         askField.placeholder = (state.askPlaceholder ?? "") + (state.busy ? "" : "  (⌘↩ new line)")
-        askField.isEditable = !state.busy
+        askField.isEditable = true
         send.enabled = !state.busy
 
         pills.forEach { $0.removeFromSuperview() }
@@ -591,6 +607,8 @@ final class ConversationWindow: NSObject, NSTextViewDelegate {
         scroll.isHidden = true; draftScroll.isHidden = true; targetLabel.isHidden = true; pickList.isHidden = true
         switch state.body {
         case .message, .transcript:
+            let oldOrigin = scroll.contentView.bounds.origin
+            let wasAtBottom = transcript.bounds.height - scroll.contentView.bounds.maxY <= 24
             let text = attributedBody(state.body)
             // Wrap to the scroll view's visible width, so no line runs past the card's edge.
             scroll.isHidden = false
@@ -607,8 +625,12 @@ final class ConversationWindow: NSObject, NSTextViewDelegate {
             let height = max(18, fill ? room : min(full, room))
             scroll.frame.size.height = height
             transcript.frame = NSRect(x: 0, y: 0, width: textWidth, height: max(full, height))
-            if case .transcript(_, let streaming) = state.body, streaming != nil {
-                transcript.scrollToEndOfDocument(nil) // follow the reply as it is written
+            if case .transcript(_, let streaming) = state.body, streaming != nil, wasAtBottom {
+                transcript.scrollToEndOfDocument(nil)
+            } else {
+                let maxY = max(0, transcript.frame.height - scroll.contentSize.height)
+                scroll.contentView.scroll(to: NSPoint(x: oldOrigin.x, y: min(oldOrigin.y, maxY)))
+                scroll.reflectScrolledClipView(scroll.contentView)
             }
             y += height + 10
         case .pick:

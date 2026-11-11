@@ -129,3 +129,22 @@ Both paths bill the same `opencode-go` account; Hermes adds its context, memory 
 - Quili spawns `opencode run --format json` itself (prompts in Swift). Settings gain an **AI engine** choice:
   *Server URL* (original), *opencode (local)*; the mock toggle stays. Default model `opencode-go/deepseek-v4.1-flash`.
 - `tools/agent_server.py` stays as a development tool; nothing depends on it.
+
+## Q16 — Conversation control and capture continuity
+**Status:** Implemented 2026-10-24; live Slack/UI validation pending
+
+- Capture coverage is stored with each source and restored from History. Legacy records with no coverage remain
+  explicitly unknown and use the same Save anyway gate as an incomplete capture.
+- Check for new replies combines capture and summary refresh. A changed source identity prevents sending messages
+  from another thread into the current session. Source identity still uses channel and normalized first message;
+  an edited or missing parent may require reopening the thread from Slack.
+- Stop generating cancels the active response without closing the window. Partial text remains visible, and Retry
+  response replays the failed/stopped request without adding a duplicate question locally. Retries are new remote
+  attempts; a transport failure cannot prove the previous request never reached Hermes.
+- Generation identifiers prevent late callbacks from cancelled work from updating a different conversation.
+- The composer stays editable during generation, with sending disabled until completion. Unsent composer text is
+  stored in the encrypted source record when closing or switching conversations (not an autosave on every keystroke).
+- Streaming follows the response only while the reader is near the bottom. The elapsed-time ticker updates status
+  without replacing the conversation body or note editor.
+- The headless regression runner is `python3 mac/Tests/run-hermes-ux.py`. It runs the production controller with
+  deterministic window, transport and storage doubles, and tests production Codable models for legacy migration.

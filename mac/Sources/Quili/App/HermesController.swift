@@ -33,6 +33,13 @@ final class HermesController {
     private var pickedMessages: [String] = []
     private var pickChannel = ""
     private var pickCoverage = ReadCoverage()
+    private var operationID = 0
+    private var retryTurn: (() -> Void)?
+    private var canRetry = false
+    private var partialResponse: String?
+    private var canStop = false
+    private var coverageUnknown = false
+    private let unknownCoverage = "Capture completeness wasn't recorded. Reopen the source to check it before saving."
 
     fileprivate enum Mode {
         case idle
@@ -76,15 +83,17 @@ final class HermesController {
         reset()
         mode = .reading
         window.show(state(body: .message("Reading the thread…")), near: anchor)
+        let operation = operationID
         task = Task { [weak self] in
             guard let self else { return }
             guard let source = await Self.readThread(pid: pid), !Task.isCancelled else {
-                if !Task.isCancelled {
+                if !Task.isCancelled, self.operationID == operation {
                     self.window.hide()
                     Notifier.show("No thread found", "Open the thread in Slack's side pane (click its replies link) and try again.")
                 }
                 return
             }
+            guard self.operationID == operation else { return }
             self.open(source)
         }
     }
@@ -122,24 +131,28 @@ final class HermesController {
         slack = selection
         notice = coverage.warning
         let key = HermesSessions.key(kind: .selection, channel: source, firstMessage: body)
-        record = store.source(key).flatMap { $0.sessionId == nil ? nil : $0 }
+        record = store.source(key)
             ?? HermesSource(key: key, kind: .selection, channel: source, title: Self.title(for: selection), sessionId: nil,
-                            sentMessages: [], transcript: [], updated: Date())
+                            sentMessages: [], transcript: [], updated: Date(), coverage: coverage)
         mode = .conversation
         window.show(state(body: .message("")), near: anchor)
         render()
-        window.prefillAsk(body + "\n\n")
+        window.prefillAsk(record?.composerDraft ?? (body + "\n\n"))
     }
 
     /// Reopens a stored conversation from the menu bar's history: its transcript, Ask Hermes, and saving (an update
     /// to the note saved before, or a new note). The Slack source itself isn't re-read.
     func openHistory(key: String, near anchor: NSRect) {
-        guard let known = store.source(key), known.sessionId != nil else { return }
+        guard store.source(key)?.sessionId != nil else { return }
         cancelWork()
+        guard let known = store.source(key) else { return }
         self.anchor = anchor
         reset()
         record = known
-        slack = SlackSource(kind: known.kind, channel: known.channel, messages: [], coverage: ReadCoverage(), reread: nil)
+        coverageUnknown = known.coverage == nil
+        notice = known.coverage?.warning ?? (coverageUnknown ? unknownCoverage : nil)
+        slack = SlackSource(kind: known.kind, channel: known.channel, messages: [], coverage: known.coverage ?? ReadCoverage(), reread: nil)
+        window.composerText = known.composerDraft ?? ""
         mode = .conversation
         window.show(state(body: .message("")), near: anchor)
         render()
@@ -164,6 +177,9 @@ final class HermesController {
         let key = HermesSessions.key(kind: source.kind, channel: source.channel, firstMessage: source.messages.first ?? "")
         if let known = store.source(key), known.sessionId != nil, !known.transcript.isEmpty {
             record = known
+            record?.coverage = source.coverage
+            if let record { store.save(record) }
+            window.composerText = known.composerDraft ?? ""
             mode = .conversation
             let fresh = newMessages(in: source, for: known)
             DebugLog.write("hermes: resumed \(key) (\(fresh.count) new messages)")
@@ -175,7 +191,7 @@ final class HermesController {
             return
         }
         record = HermesSource(key: key, kind: source.kind, channel: source.channel, title: Self.title(for: source),
-                              sessionId: nil, sentMessages: [], transcript: [], updated: Date())
+                              sessionId: nil, sentMessages: [], transcript: [], updated: Date(), coverage: source.coverage)
         summarize()
     }
 
@@ -192,6 +208,7 @@ final class HermesController {
 
     private func ask(_ question: String) {
         guard var record, busySince == nil, record.sessionId != nil || record.kind == .selection else { return }
+        record.composerDraft = nil
         record.transcript.append(.init(role: .question, text: question, date: Date()))
         self.record = record
         if record.sessionId != nil { store.save(record) }
@@ -212,7 +229,10 @@ final class HermesController {
     private func refresh() {
         guard let slack, let record, let session = record.sessionId else { return }
         let fresh = newMessages(in: slack, for: record)
-        guard !fresh.isEmpty else { notice = slack.coverage.warning; render(); return }
+        guard !fresh.isEmpty else {
+            notice = [slack.coverage.warning, "Already up to date."].compactMap { $0 }.joined(separator: " · ")
+            render(); return
+        }
         notice = slack.coverage.warning
         let input = Prompts.hermesRefresh(kind: slack.kind.rawValue, channel: slack.channel, newText: fresh.joined(separator: "\n\n"))
         runTurn(input, target: .resume(sessionId: session), role: .summary, sending: fresh)
@@ -226,20 +246,34 @@ final class HermesController {
     /// One Hermes turn with live text and an elapsed-time status; the result joins the transcript.
     private func runTurn(_ input: String, target: HermesTarget, role: HermesSource.Entry.Role, sending: [String]) {
         alert = nil
+        partialResponse = nil
+        canRetry = false
+        let retryMode = mode
+        retryTurn = { [weak self] in
+            guard let self else { return }
+            self.mode = retryMode
+            self.runTurn(input, target: target, role: role, sending: sending)
+        }
         startBusy()
+        canStop = true
+        let operation = operationID
         render(streaming: "")
         task = Task { [weak self] in
             guard let self else { return }
             do {
                 let reply = try await HermesClient.turn(input, target: target, settings: self.settings) { [weak self] soFar in
-                    guard let self, self.busySince != nil else { return }
+                    guard let self, self.busySince != nil, self.operationID == operation else { return }
                     self.lastStreamed = soFar
                     self.render(streaming: soFar)
                 }
                 try Task.checkCancellation()
+                guard self.operationID == operation else { return }
                 self.stopBusy(seconds: reply.seconds)
                 guard var record = self.record else { return }
+                self.retryTurn = nil
+                self.canRetry = false
                 record.sessionId = reply.sessionId
+                record.coverage = self.coverageUnknown ? nil : self.slack?.coverage
                 record.sentMessages += sending.map(HermesSessions.normalized)
                 if case .drafting = self.mode {
                     self.record = record
@@ -259,11 +293,18 @@ final class HermesController {
                 }
                 self.render()
             } catch is CancellationError {
+                guard self.operationID == operation else { return }
                 self.stopBusy(seconds: nil)
             } catch let error as HermesError {
+                guard self.operationID == operation else { return }
+                self.partialResponse = self.lastStreamed
+                self.canRetry = true
                 self.stopBusy(seconds: nil)
                 self.failed(error)
             } catch {
+                guard self.operationID == operation else { return }
+                self.canRetry = self.retryTurn != nil
+                self.partialResponse = self.lastStreamed
                 self.stopBusy(seconds: nil)
                 self.failed(HermesError(message: error.localizedDescription, unreachable: false))
             }
@@ -273,7 +314,7 @@ final class HermesController {
     private func failed(_ error: HermesError) {
         DebugLog.write("hermes failed: \(error.message)")
         alert = error.message
-        if case .drafting = mode { mode = .conversation }
+        if case .drafting = mode { mode = .conversation; partialResponse = nil }
         if error.unreachable, record?.sessionId == nil { mode = .unreachable }
         render()
     }
@@ -284,7 +325,12 @@ final class HermesController {
         guard let slack else { return }
         alert = nil
         mode = .direct(nil)
+        retryTurn = { [weak self] in self?.summarizeDirectly() }
+        canRetry = false
+        partialResponse = nil
         startBusy()
+        canStop = true
+        let operation = operationID
         render(streaming: "")
         task = Task { [weak self] in
             guard let self else { return }
@@ -293,21 +339,27 @@ final class HermesController {
                 let instructions = slack.kind == .selection ? Prompts.summarizeSelectionDirect : nil
                 let text = try await OpencodeClient.run(slack.text, action: .summarizeThread, settings: self.settings,
                                                         instructions: instructions) { [weak self] soFar in
-                    guard let self, self.busySince != nil else { return }
+                    guard let self, self.busySince != nil, self.operationID == operation else { return }
                     self.lastStreamed = soFar
                     self.render(streaming: soFar)
                 }
                 try Task.checkCancellation()
+                guard self.operationID == operation else { return }
                 self.stopBusy(seconds: Date().timeIntervalSince(started))
                 self.mode = .direct(text)
+                self.retryTurn = nil
                 TextAccess.setPasteboard(TextHygiene.slackMarkup(text))
                 Notifier.show("Summarized directly", "Not saved to Hermes. The summary was copied to the clipboard.")
                 self.render()
             } catch is CancellationError {
+                guard self.operationID == operation else { return }
                 self.stopBusy(seconds: nil)
             } catch {
+                guard self.operationID == operation else { return }
+                self.canRetry = self.retryTurn != nil
+                self.partialResponse = self.lastStreamed
                 self.stopBusy(seconds: nil)
-                self.mode = .unreachable
+                self.mode = .direct(self.partialResponse)
                 self.alert = error.localizedDescription
                 self.render()
             }
@@ -319,8 +371,8 @@ final class HermesController {
     /// `update`: add to the note saved earlier from this conversation instead of writing a new one.
     private func saveToContext(update: Bool = false) {
         guard let slack, let record, let session = record.sessionId, busySince == nil else { return }
-        if !slack.coverage.isClean && !saveAnyway {
-            alert = "This read may be incomplete (\(slack.coverage.warning ?? "")). Retry the read, or save anyway."
+        if (coverageUnknown || !slack.coverage.isClean) && !saveAnyway {
+            alert = "This read may be incomplete (\(slack.coverage.warning ?? unknownCoverage)). Retry the read, or save anyway."
             render(extra: [ConversationAction(id: update ? "updateAnyway" : "saveAnyway", title: "Save anyway")])
             return
         }
@@ -362,6 +414,7 @@ final class HermesController {
         let title = markdown.split(separator: "\n").first { $0.hasPrefix("# ") }.map { String($0.dropFirst(2)) } ?? record?.title ?? "note"
         let name = Self.fileName(for: title)
         startBusy()
+        let operation = operationID
         render()
         task = Task { [weak self] in
             guard let self else { return }
@@ -373,6 +426,7 @@ final class HermesController {
                 } else {
                     path = try await HermesClient.writeNote(markdown, name: name, settings: self.settings)
                 }
+                guard self.operationID == operation else { return }
                 self.stopBusy(seconds: nil)
                 self.mode = .conversation
                 self.saveAnyway = false
@@ -384,6 +438,9 @@ final class HermesController {
                 Notifier.show(appendTo == nil ? "Saved to work context" : "Note updated", (path as NSString).lastPathComponent)
                 self.render()
             } catch {
+                guard self.operationID == operation else { return }
+                self.canRetry = self.retryTurn != nil
+                self.partialResponse = self.lastStreamed
                 self.stopBusy(seconds: nil)
                 self.alert = error.localizedDescription
                 self.render() // stays in the draft so nothing typed is lost
@@ -397,13 +454,23 @@ final class HermesController {
         switch id {
         case "summarizePick": summarizePick()
         case "cancel": close()
-        case "refresh": refresh()
+        case "refresh": retryRead()
+        case "stop":
+            partialResponse = lastStreamed
+            cancelWork()
+            canRetry = retryTurn != nil
+            if case .drafting = mode { mode = .conversation; partialResponse = nil }
+            if case .direct = mode { mode = .direct(partialResponse) }
+            alert = "Response stopped. Retry when you're ready."
+            render()
+        case "retryTurn": retryTurn?()
         case "save": saveToContext()
         case "update": saveToContext(update: true)
         case "saveAnyway": saveAnyway = true; saveToContext()
         case "updateAnyway": saveAnyway = true; saveToContext(update: true)
         case "retryRead": retryRead()
         case "retry":
+            if canRetry, let retryTurn { retryTurn(); return }
             if record?.sessionId == nil, record?.kind == .selection, let last = record?.transcript.last(where: { $0.role == .question }) {
                 mode = .conversation
                 send(last.text) // the first message never reached Hermes
@@ -437,29 +504,38 @@ final class HermesController {
         alert = nil
         saveAnyway = false
         mode = .reading
+        partialResponse = nil
+        canRetry = false
+        let operation = operationID
         render()
         task = Task { [weak self] in
             guard let self else { return }
             guard let source = await reread(), !Task.isCancelled else {
+                guard !Task.isCancelled, self.operationID == operation else { return }
                 self.alert = "Couldn't read the thread again. Is it still open in Slack?"
                 self.mode = .conversation
                 self.render()
                 return
             }
+            guard self.operationID == operation else { return }
+            // Slack may have navigated to a different thread while this bubble stayed open.
+            let key = HermesSessions.key(kind: source.kind, channel: source.channel, firstMessage: source.messages.first ?? "")
+            guard key == self.record?.key else {
+                self.mode = .conversation
+                self.alert = "Slack is showing a different thread. Open the original thread and try again."
+                self.render()
+                return
+            }
+            self.coverageUnknown = false
+            self.record?.coverage = source.coverage
+            if let record = self.record { self.store.save(record) }
             if self.record?.sessionId == nil {
                 self.open(source)
             } else {
                 self.slack = source
                 self.mode = .conversation
                 self.notice = source.coverage.warning
-                if let record = self.record {
-                    let fresh = self.newMessages(in: source, for: record)
-                    if !fresh.isEmpty {
-                        let count = "\(fresh.count) new message\(fresh.count == 1 ? "" : "s") since this summary"
-                        self.notice = [self.notice, count].compactMap { $0 }.joined(separator: " · ")
-                    }
-                }
-                self.render()
+                self.refresh()
             }
         }
     }
@@ -493,9 +569,9 @@ final class HermesController {
                 body = .draft(text: window.draftText, target: target)
             }
         case .conversation, .unreachable:
-            body = .transcript(record?.transcript ?? [], streaming: streaming)
+            body = .transcript(record?.transcript ?? [], streaming: streaming ?? partialResponse)
         }
-        if case .conversation = mode, record?.transcript.isEmpty ?? true, streaming == nil, busySince == nil {
+        if case .conversation = mode, record?.transcript.isEmpty ?? true, streaming == nil, partialResponse == nil, busySince == nil {
             body = .message(record?.kind == .selection
                 ? "Edit the copied text and add your question, then press Return to send it to Hermes. ⌘↩ adds a line."
                 : alert == nil ? "Reading the thread…" : "No summary yet.")
@@ -531,14 +607,19 @@ final class HermesController {
     }
 
     private func actions() -> [ConversationAction] {
-        if busySince != nil { return [] }
+        if busySince != nil {
+            return canStop ? [ConversationAction(id: "stop", title: "Stop generating")] : []
+        }
         switch mode {
         case .idle, .reading: return []
         case .picking:
             return [ConversationAction(id: "summarizePick", title: "Summarize with Hermes", primary: true),
                     ConversationAction(id: "cancel", title: "Cancel")]
         case .direct:
-            return slack?.reread == nil ? [] : [ConversationAction(id: "retryRead", title: "Retry read")]
+            var list: [ConversationAction] = []
+            if canRetry { list.append(ConversationAction(id: "retryTurn", title: "Retry response", primary: true)) }
+            if slack?.reread != nil { list.append(ConversationAction(id: "retryRead", title: "Retry capture")) }
+            return list
         case .drafting:
             return [ConversationAction(id: "approve", title: "Approve and save", primary: true),
                     ConversationAction(id: "discard", title: "Discard")]
@@ -547,11 +628,12 @@ final class HermesController {
                     ConversationAction(id: "direct", title: "Summarize directly this once")]
         case .conversation:
             guard record?.sessionId != nil else {
-                return [ConversationAction(id: "retry", title: "Retry", primary: true)]
+                return canRetry ? [ConversationAction(id: "retry", title: "Retry response", primary: true)] : []
             }
             var list: [ConversationAction] = []
-            if let slack, let record, !newMessages(in: slack, for: record).isEmpty {
-                list.append(ConversationAction(id: "refresh", title: "Refresh", primary: true))
+            if canRetry { list.append(ConversationAction(id: "retryTurn", title: "Retry response", primary: true)) }
+            if slack?.reread != nil {
+                list.append(ConversationAction(id: "refresh", title: "Check for new replies", primary: list.isEmpty))
             }
             if record?.savedNote != nil {
                 list.append(ConversationAction(id: "update", title: "Update saved note", primary: list.isEmpty))
@@ -559,7 +641,6 @@ final class HermesController {
             } else {
                 list.append(ConversationAction(id: "save", title: "Save to work context", primary: list.isEmpty))
             }
-            if slack?.reread != nil { list.append(ConversationAction(id: "retryRead", title: "Retry read")) }
             list.append(ConversationAction(id: "forget", title: "Start over"))
             return list
         }
@@ -568,6 +649,8 @@ final class HermesController {
     // MARK: Busy state
 
     private func startBusy() {
+        operationID += 1
+        canStop = false
         busySince = Date()
         ticker?.cancel()
         ticker = Task { [weak self] in
@@ -582,11 +665,12 @@ final class HermesController {
     /// Only the status text changes each second; the body stays as streamed.
     private var lastStreamed: String?
     private func refreshStatus() {
-        render(streaming: lastStreamed ?? "")
+        window.updateStatus(state(body: .message("")).status)
     }
 
     private func stopBusy(seconds: Double?) {
         busySince = nil
+        canStop = false
         lastStreamed = nil
         if let seconds { lastSeconds = seconds }
         ticker?.cancel()
@@ -594,12 +678,23 @@ final class HermesController {
     }
 
     private func cancelWork() {
+        if var record {
+            record.composerDraft = window.composerText.isEmpty ? nil : window.composerText
+            self.record = record
+            store.save(record)
+        }
+        operationID += 1
         task?.cancel()
         task = nil
         stopBusy(seconds: nil)
     }
 
     private func reset() {
+        window.composerText = ""
+        retryTurn = nil
+        canRetry = false
+        partialResponse = nil
+        coverageUnknown = false
         slack = nil
         record = nil
         notice = nil
